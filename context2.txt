@@ -1,0 +1,3781 @@
+=== FILE: backend/app/__init__.py ===
+
+
+=== FILE: backend/app/models.py ===
+from sqlalchemy import Column, Integer, String, Text, Boolean, ForeignKey, UniqueConstraint, ARRAY
+from sqlalchemy.orm import declarative_base, relationship
+
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    group_name = Column(String(20), nullable=False)  # Чистое название группы (например, Ис-381)
+    about = Column(Text, nullable=True)
+
+    # Связи
+    projects = relationship("Project", back_populates="author", cascade="all, delete-orphan")
+    comments = relationship("Comment", back_populates="author", cascade="all, delete-orphan")
+    votes = relationship("CommentVote", back_populates="user", cascade="all, delete-orphan")
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(100), nullable=False, index=True)
+    short_desc = Column(String(255), nullable=False)
+    full_desc = Column(Text, nullable=True)
+    direction = Column(String(50), nullable=False)  # Веб-разработка, Дизайн, Game-dev и т.д.
+    lang = Column(String(30), nullable=True)         # Python, JS, C++
+    github = Column(String(255), nullable=True)
+    comments_disabled = Column(Boolean, default=False)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Связи
+    author = relationship("User", back_populates="projects")
+    comments = relationship("Comment", back_populates="project", cascade="all, delete-orphan")
+    media_urls = Column(ARRAY(String), nullable=True, default=[])
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(Text, nullable=False)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+
+    # Связи
+    author = relationship("User", back_populates="comments")
+    project = relationship("Project", back_populates="comments")
+    votes = relationship("CommentVote", back_populates="comment", cascade="all, delete-orphan")
+
+
+class CommentVote(Base):
+    """Таблица для хранения лайков и дизлайков (один юзер - один голос)"""
+    __tablename__ = "comment_votes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    comment_id = Column(Integer, ForeignKey("comments.id", ondelete="CASCADE"), nullable=False)
+    is_like = Column(Boolean, nullable=False)  # True = Лайк, False = Дизлайк
+
+    # Связи
+    user = relationship("User", back_populates="votes")
+    comment = relationship("Comment", back_populates="votes")
+
+    # Жесткое ограничение: один пользователь может проголосовать за один коммент только один раз
+    __table_args__ = (UniqueConstraint('user_id', 'comment_id', name='_user_comment_vote_uc'),)
+
+
+=== FILE: backend/app/auth.py ===
+from datetime import datetime, timedelta
+from typing import Optional
+from jose import jwt
+import bcrypt
+
+# Конфигурация шифрования
+SECRET_KEY = "CHRT_HUB_SUPER_SECRET_KEY_74"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+
+def hash_password(password: str) -> str:
+    # Переводим в байты, генерируем соль и хэшируем
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8') # Возвращаем строку для записи в Postgres
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    # Сравниваем байты чистого пароля с байтами хэша из базы
+    return bcrypt.checkpw(
+        plain_password.encode('utf-8'),
+        hashed_password.encode('utf-8')
+    )
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+=== FILE: backend/app/database.py ===
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+import os
+
+# Ссылку на базу данных Docker Compose прокинет сам через переменные окружения
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://chrt_admin:chrt_secure_pass@db:5432/chrt_hub_db")
+
+engine = create_async_engine(DATABASE_URL, echo=True)
+
+AsyncSessionLocal = sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
+
+# Функция-зависимость (Dependency injection) для роутеров FastAPI
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+=== FILE: backend/app/schemas.py ===
+from pydantic import BaseModel, Field, ConfigDict
+from typing import Optional
+
+# ---- СХЕМЫ ПОЛЬЗОВАТЕЛЯ ----
+
+# То, что прилетает с фронтенда при регистрации
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6)
+    group_name: str = Field(..., min_length=2, max_length=20)
+    about: Optional[str] = None
+
+# То, что бэкенд возвращает в ответ (БЕЗ пароля в целях безопасности!)
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    group_name: str
+    about: Optional[str] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
+# То, что прилетает при входе (Login)
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+
+# ---- СХЕМЫ ТОКЕНОВ БЕЗОПАСНОСТИ ----
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserResponse
+
+
+# ---- СХЕМЫ КОММЕНТАРИЕВ ----
+
+# То, что прилетает с фронтенда при создании комментария
+class CommentCreate(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000)
+    project_id: int
+
+# Ответ бэкенда с данными автора и счетчиками лайков/дизлайков
+class CommentResponse(BaseModel):
+    id: int
+    text: str
+    project_id: int
+    author_id: int
+    author_name: str
+    author_group: str
+    likes_count: int
+    dislikes_count: int
+    user_vote: Optional[bool] = None  # True = лайк, False = дизлайк, None = нет голоса
+
+    model_config = ConfigDict(from_attributes=True)
+
+# Схема для отправки голоса (лайк/дизлайк)
+class VoteRequest(BaseModel):
+    is_like: bool
+
+
+=== FILE: backend/app/main.py ===
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from app.database import engine, get_db
+from app.models import Base, Project, User
+from app.schemas import UserCreate, UserResponse, UserLogin, Token
+from app.auth import hash_password, verify_password, create_access_token
+from fastapi.security import OAuth2PasswordBearer
+from jose import jwt, JWTError
+from sqlalchemy.orm import selectinload
+from app.auth import SECRET_KEY, ALGORITHM
+from app.models import Comment, CommentVote
+from app.schemas import CommentCreate, CommentResponse, VoteRequest
+from sqlalchemy.sql import func
+from fastapi import Request  # Убедись, что Request импортирован в самом верху файла
+import os
+import shutil
+from uuid import uuid4
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func
+
+app = FastAPI(title="Chrt-Hub API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+@app.get("/api/health", tags=["System"])
+async def health_check():
+    return {"status": "working", "database": "connected"}
+
+
+# ================= ЭНДПОИНТ: РЕГИСТРАЦИЯ СТУДЕНТА =================
+@app.post("/api/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED, tags=["Auth"])
+async def register_user(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+    # Проверяем, нет ли уже пользователя с таким логином в базе
+    result = await db.execute(select(User).where(User.username == user_data.username))
+    existing_user = result.scalars().first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Пользователь с таким именем уже зарегистрирован в ЧРТ!"
+        )
+    
+    # Хэшируем пароль и создаем запись в PostgreSQL
+    new_user = User(
+        username=user_data.username,
+        hashed_password=hash_password(user_data.password),
+        group_name=user_data.group_name,
+        about=user_data.about
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+    return new_user
+
+
+# ================= ЭНДПОИНТ: ВХОД В АККАУНТ (LOGIN) =================
+@app.post("/api/auth/login", response_model=Token, tags=["Auth"])
+async def login_user(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
+    # Ищем пользователя по логину
+    result = await db.execute(select(User).where(User.username == login_data.username))
+    user = result.scalars().first()
+    
+    # Если не нашли или пароль не совпал — бьем ошибку
+    if not user or not verify_password(login_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверное имя пользователя или пароль!"
+        )
+    
+    # Если всё четко — генерируем токен и отдаем его вместе с данными профиля
+    access_token = create_access_token(data={"sub": user.username, "user_id": user.id})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user
+    }
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+# Зависимость для извлечения текущего пользователя из JWT
+async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Не удалось валидировать учетные данные",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        user_id: int = payload.get("user_id")
+        if username is None or user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+# ================= ОБНОВЛЕННЫЙ ЕНДПОИНТ: ВСЕ ПРОЕКТЫ С АВТОРАМИ =================
+@app.get("/api/projects", tags=["Projects"])
+async def get_all_projects(direction: str = "Все", lang: str = "Все", db: AsyncSession = Depends(get_db)):
+    # Подгружаем автора через selectinload, чтобы избежать N+1 запросов в асинхронной среде
+    query = select(Project).options(selectinload(Project.author))
+    if direction != "Все":
+        query = query.where(Project.direction == direction)
+    if lang != "Все":
+        query = query.where(Project.lang == lang)
+    
+    result = await db.execute(query.order_by(Project.id.desc()))
+    projects = result.scalars().all()
+    
+    # Маппим под формат фронтенда (переводим в camelCase для удобства React)
+    return [
+        {
+            "id": p.id,
+            "title": p.title,
+            "shortDesc": p.short_desc,
+            "fullDesc": p.full_desc,
+            "direction": p.direction,
+            "lang": p.lang,
+            "github": p.github,
+            "commentsDisabled": p.comments_disabled,
+            "author": p.author.username,
+            "author_id": p.author_id,
+            "group_name": p.author.group_name,
+            "media": p.media_urls
+        }
+        for p in projects
+    ]
+
+
+# ================= ЭНДПОИНТ: ЛЕНТА ТЕКУЩЕГО СТУДЕНТА =================
+@app.get("/api/my/projects", tags=["Projects"])
+async def get_my_projects(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Project)
+        .options(selectinload(Project.author))
+        .where(Project.author_id == current_user.id)
+        .order_by(Project.id.desc())
+    )
+    projects = result.scalars().all()
+    return [
+        {
+            "id": p.id,
+            "title": p.title,
+            "shortDesc": p.short_desc,
+            "fullDesc": p.full_desc,
+            "direction": p.direction,
+            "lang": p.lang,
+            "github": p.github,
+            "commentsDisabled": p.comments_disabled,
+            "author": p.author.username,
+            "author_id": p.author_id,
+            "media": p.media_urls
+        }
+        for p in projects
+    ]
+
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
+
+# ================= ЭНДПОИНТ: ПУБЛИКАЦИЯ ПРОЕКТА =================
+@app.post("/api/projects", status_code=status.HTTP_201_CREATED, tags=["Projects"])
+async def create_project(
+    title: str = Form(...),
+    shortDesc: str = Form(...),
+    fullDesc: str = Form(""),
+    direction: str = Form(...),
+    lang: str = Form(""),
+    github: str = Form(""),
+    commentsDisabled: bool = Form(False),
+    files: list[UploadFile] = File(default=[]), # Принимаем массив файлов от скрепки
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    saved_media_urls = []
+
+    # Сохраняем каждый файл во внутреннюю статику бэкенда
+    for file in files:
+        # Генерируем уникальное имя файла, чтобы избежать коллизий
+        file_ext = os.path.splitext(file.filename)[1]
+        unique_filename = f"{uuid4()}{file_ext}"
+        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+
+        # Асинхронно записываем контент файла на диск контейнера
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # URL, по которому фронтенд сможет достучаться до файла
+        saved_media_urls.append(f"http://localhost:8000/static/{unique_filename}")
+
+    new_project = Project(
+        title=title,
+        short_desc=shortDesc,
+        full_desc=fullDesc,
+        direction=direction,
+        lang=lang,
+        github=github,
+        comments_disabled=commentsDisabled,
+        author_id=current_user.id,
+        media_urls=saved_media_urls # Сохраняем массив ссылок в Postgres
+    )
+    db.add(new_project)
+    await db.commit()
+    await db.refresh(new_project)
+    
+    return {
+        "id": new_project.id,
+        "title": new_project.title,
+        "shortDesc": new_project.short_desc,
+        "fullDesc": new_project.full_desc,
+        "direction": new_project.direction,
+        "lang": new_project.lang,
+        "github": new_project.github,
+        "commentsDisabled": new_project.comments_disabled,
+        "author": current_user.username,
+        "author_id": new_project.author_id,
+        "media": new_project.media_urls # Отдаем обратно фронтенду
+    }
+# ================= ЭНДПОИНТ: УДАЛЕНИЕ С ПРОВЕРКОЙ АВТОРСТВА =================
+@app.delete("/api/projects/{project_id}", tags=["Projects"])
+async def delete_project(project_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalars().first()
+    
+    if not project:
+        raise HTTPException(status_code=404, detail="Проект на Chrt-Hub не найден")
+    
+    # Жесткая проверка: студент может удалить только свой проект
+    if project.author_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Вы не можете удалять чужие проекты!")
+        
+    await db.delete(project)
+    await db.commit()
+    return {"status": "deleted"}
+
+
+
+
+# ================= ИСПРАВЛЕННЫЙ ЭНДПОИНТ: ПОЛУЧЕНИЕ КОММЕНТАРИЕВ ДЛЯ ВСЕХ =================
+@app.get("/api/projects/{project_id}/comments", response_model=list[CommentResponse], tags=["Comments"])
+async def get_project_comments(project_id: int, request: Request, db: AsyncSession = Depends(get_db)):
+    # 1. Вручную и безопасно проверяем наличие заголовка Authorization
+    user_id = None
+    auth_header = request.headers.get("Authorization")
+    
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1]
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("user_id")
+        except JWTError:
+            pass  # Если токен сломан или истек, просто читаем как аноним
+
+    # 2. Запрашиваем комментарии из базы (этот код выполняется теперь и для анонимов, и для студентов!)
+    result = await db.execute(
+        select(Comment)
+        .options(selectinload(Comment.author), selectinload(Comment.votes))
+        .where(Comment.project_id == project_id)
+        .order_by(Comment.id.asc())
+    )
+    comments = result.scalars().all()
+
+    response = []
+    for c in comments:
+        likes = sum(1 for v in c.votes if v.is_like)
+        dislikes = sum(1 for v in c.votes if not v.is_like)
+        
+        # Выясняем, как проголосовал текущий пользователь (если он авторизован)
+        user_vote = None
+        if user_id:
+            for v in c.votes:
+                if v.user_id == user_id:
+                    user_vote = v.is_like
+                    break
+
+        response.append({
+            "id": c.id,
+            "text": c.text,
+            "project_id": c.project_id,
+            "author_id": c.author_id,
+            "author_name": c.author.username,
+            "author_group": c.author.group_name,
+            "likes_count": likes,
+            "dislikes_count": dislikes,
+            "user_vote": user_vote
+        })
+    
+    return response
+
+
+
+# ================= ЭНДПОИНТ: ДОБАВЛЕНИЕ КОММЕНТАРИЯ =================
+@app.post("/api/comments", response_model=CommentResponse, tags=["Comments"])
+async def create_comment(comment_data: CommentCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Проверяем, существует ли проект и не отключены ли комментарии
+    proj_res = await db.execute(select(Project).where(Project.id == comment_data.project_id))
+    project = proj_res.scalars().first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Проект не найден")
+    if project.comments_disabled:
+        raise HTTPException(status_code=400, detail="Обсуждение этого проекта отключено автором")
+
+    new_comment = Comment(
+        text=comment_data.text,
+        project_id=comment_data.project_id,
+        author_id=current_user.id
+    )
+    db.add(new_comment)
+    await db.commit()
+    await db.refresh(new_comment)
+
+    return {
+        "id": new_comment.id,
+        "text": new_comment.text,
+        "project_id": new_comment.project_id,
+        "author_id": new_comment.author_id,
+        "author_name": current_user.username,
+        "author_group": current_user.group_name,
+        "likes_count": 0,
+        "dislikes_count": 0,
+        "user_vote": None
+    }
+
+
+# ================= ЭНДПОИНТ: ЛАЙК / ДИЗЛАЙК С ЛОГИКОЙ TOGGLE =================
+@app.post("/api/comments/{comment_id}/vote", tags=["Comments"])
+async def vote_comment(comment_id: int, vote_data: VoteRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # Проверяем наличие комментария
+    comm_res = await db.execute(select(Comment).where(Comment.id == comment_id))
+    if not comm_res.scalars().first():
+        raise HTTPException(status_code=404, detail="Комментарий не найден")
+
+    # Ищем, голосовал ли уже этот студент за этот комментарий
+    vote_res = await db.execute(
+        select(CommentVote)
+        .where(CommentVote.user_id == current_user.id, CommentVote.comment_id == comment_id)
+    )
+    existing_vote = vote_res.scalars().first()
+
+    if existing_vote:
+        if existing_vote.is_like == vote_data.is_like:
+            # Если кликнули на то же самое состояние — забираем голос (Toggle OFF)
+            await db.delete(existing_vote)
+            msg = "Голос убран"
+        else:
+            # Если кликнули на противоположное состояние — меняем лайк на дизлайк (или наоборот)
+            existing_vote.is_like = vote_data.is_like
+            msg = "Голос изменен"
+    else:
+        # Голоса не было — создаем новую запись
+        new_vote = CommentVote(
+            user_id=current_user.id,
+            comment_id=comment_id,
+            is_like=vote_data.is_like
+        )
+        db.add(new_vote)
+        msg = "Голос учтен"
+
+    await db.commit()
+    return {"status": "success", "message": msg}
+
+# ================= ИСПРАВЛЕННЫЙ ЭНДПОИНТ: РЕЙТИНГ СТУДЕНТОВ ЧРТ =================
+@app.get("/api/users/rating", tags=["System"])
+async def get_users_rating(db: AsyncSession = Depends(get_db)):
+    # Строим чистый LEFT JOIN для подсчета количества проектов у каждого юзера
+    query = (
+        select(
+            User.username, 
+            User.group_name, 
+            func.count(Project.id).label("projects_count")
+        )
+        .join(Project, User.id == Project.author_id, isouter=True)
+        .group_by(User.id, User.username, User.group_name)
+        .order_by(func.count(Project.id).desc(), User.username.asc())
+        .limit(5)
+    )
+    
+    result = await db.execute(query)
+    rating_data = result.all()
+    
+    # Маппим данные в понятный для фронтенда формат
+    return [
+        {
+            "name": f"{r.username} ({r.group_name})",
+            "count": r.projects_count
+        }
+        for r in rating_data
+    ]
+
+
+
+=== FILE: backend/app/config.py ===
+
+
+=== FILE: frontend/src/components/MainPage/Footer/Footer.css ===
+/* Footer.css */
+.main-footer {
+  background-color: var(--bg-card);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 20px 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 40px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  border-radius: 12px;
+  margin-bottom: 10px;
+}
+.footer-links {
+  display: flex;
+  gap: 24px;
+}
+.footer-links a {
+  color: var(--accent-mint);
+  text-decoration: none;
+}
+.footer-links a:hover { text-decoration: underline; }
+
+
+=== FILE: frontend/src/components/MainPage/Footer/Footer.jsx ===
+// Footer.jsx
+import './Footer.css';
+
+function Footer() {
+  return (
+    <footer className="main-footer">
+      <div>Челябинский Радиотехнический Техникум "ЧРТ"</div>
+      <div className="footer-links">
+        <span>Чат поддержки:</span>
+        <a href="https://t.me" target="_blank" rel="noreferrer">Telegram</a>
+        <a href="#max-messenger">MAX</a>
+      </div>
+    </footer>
+  );
+}
+
+export default Footer;
+
+
+=== FILE: frontend/src/components/MainPage/ProjectCard/ProjectCard.css ===
+/* ProjectCard.css */
+.project-card-main {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.card-title {
+  font-size: 1.3rem;
+  color: var(--text-main);
+}
+.card-tags {
+  display: flex;
+  gap: 8px;
+}
+.badge {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.badge.lang { background-color: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
+.badge.dir { background-color: rgba(255, 255, 255, 0.08); color: var(--text-main); }
+
+.card-desc {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.card-footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+.card-author {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+.card-author span { color: var(--text-main); }
+
+.card-actions {
+  display: flex;
+  gap: 12px;
+}
+.details-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-main);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.gh-btn {
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.gh-btn.active { background-color: #238636; color: #fff; }
+.gh-btn.disabled { background-color: #21262D; color: #8b949e; cursor: not-allowed; }
+
+
+=== FILE: frontend/src/components/MainPage/ProjectCard/ProjectCard.jsx ===
+import './ProjectCard.css';
+
+function ProjectCard({ project, onViewDetails }) { // ПРИНИМАЕМ ПРОПС ТУТ
+  const isDesign = project.direction === 'Дизайн';
+
+  return (
+    <article className="project-card-main">
+      <div className="card-header-row">
+        <h4 className="card-title">{project.title}</h4>
+        <div className="card-tags">
+          {!isDesign && <span className="badge lang">{project.lang}</span>}
+          <span className="badge dir">{project.direction}</span>
+        </div>
+      </div>
+
+      <p className="card-desc">{project.shortDesc}</p>
+
+      <div className="card-footer-row">
+        <div className="card-author">Автор: <span>{project.author}</span></div>
+        <div className="card-actions">
+          
+          {/* НАВЕШИВАЕМ КЛИК — ОН ОТПРАВИТ ДАННЫЕ ПРОЕКТА В APP.JSX И ОТКРОЕТ СТРАНИЦУ */}
+          <button className="details-btn" onClick={() => onViewDetails(project)}>
+            Подробнее
+          </button>
+
+          {isDesign ? (
+            <button className="gh-btn disabled" disabled>GitHub</button>
+          ) : (
+            <a href={project.github || "#"} target="_blank" rel="noreferrer" className="gh-btn active">GitHub</a>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export default ProjectCard;
+
+
+=== FILE: frontend/src/components/MainPage/ProjectForm/ProjectForm.jsx ===
+import { useState, useRef } from 'react';
+import './ProjectForm.css';
+
+function ProjectForm({ onAddProject, authorName }) {
+  const [title, setTitle] = useState('');
+  const [shortDesc, setShortDesc] = useState('');
+  const [fullDesc, setFullDesc] = useState('');
+  const [direction, setDirection] = useState('Веб-разработка');
+  const [lang, setLang] = useState('Python');
+  const [github, setGithub] = useState('');
+  const [disableComments, setDisableComments] = useState(false);
+  
+  // Состояние для хранения выбранных медиафайлов
+  const [mediaFiles, setMediaFiles] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    
+    // Проверка 1: Лимит на общее количество (до 10 штук суммарно)
+    if (mediaFiles.length + files.length > 10) {
+      alert('Максимальное количество медиафайлов (фото + видео) — 10 штук!');
+      return;
+    }
+
+    files.forEach(file => {
+      // Проверка 2: Если это видео, проверяем его длину
+      if (file.type.startsWith('video/')) {
+        const videoElement = document.createElement('video');
+        videoElement.preload = 'metadata';
+        
+        videoElement.onloadedmetadata = () => {
+          window.URL.revokeObjectURL(videoElement.src);
+          // Длина видео не должна превышать 30 секунд
+          if (videoElement.duration > 30) {
+            alert(`Видео "${file.name}" превышает лимит в 30 секунд! Загрузка отменена.`);
+          } else {
+            addFileToState(file);
+          }
+        };
+        videoElement.src = URL.createObjectURL(file);
+      } else if (file.type.startsWith('image/')) {
+        // Если это фото, добавляем сразу без проверки времени
+        addFileToState(file);
+      } else {
+        alert('Разрешено загружать только фотографии и видеофайлы!');
+      }
+    });
+  };
+
+  const addFileToState = (file) => {
+    const fileObj = {
+      file,
+      preview: URL.createObjectURL(file), // Создаем временную ссылку для отображения на экране
+      type: file.type.startsWith('video/') ? 'video' : 'image'
+    };
+    setMediaFiles(prev => [...prev, fileObj]);
+  };
+
+  const removeFile = (index) => {
+    setMediaFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleFormSubmit = (e) => {
+    e.preventDefault();
+    if (!title || !shortDesc) {
+      alert('Заполните название и краткое описание!');
+      return;
+    }
+
+    onAddProject({
+      title: title,
+      shortDesc: shortDesc,
+      fullDesc: fullDesc || shortDesc,
+      direction: direction,
+      lang: direction === 'Дизайн' ? 'Дизайн' : lang,
+      github: direction === 'Дизайн' ? '' : github || 'https://github.com',
+      commentsDisabled: disableComments,
+      mediaFiles: mediaFiles // Передаем наверх весь исходный массив со структурами { file, preview, type }
+    });
+
+    // Полная очистка формы
+    setTitle('');
+    setShortDesc('');
+    setFullDesc('');
+    setGithub('');
+    setMediaFiles([]);
+  };
+
+
+
+  return (
+    <aside className="project-form-sidebar">
+      <h3 className="form-title">форма</h3>
+      <form className="mini-form" onSubmit={handleFormSubmit}>
+        <input type="text" placeholder="Название проекта" value={title} onChange={e => setTitle(e.target.value)} />
+        <input type="text" placeholder="Краткое описание" value={shortDesc} onChange={e => setShortDesc(e.target.value)} />
+        <textarea placeholder="Полное описание" rows="2" value={fullDesc} onChange={e => setFullDesc(e.target.value)}></textarea>
+        <input type="text" placeholder="Ссылка на GitHub (если есть)" value={github} onChange={e => setGithub(e.target.value)} disabled={direction === 'Дизайн'} />
+        
+        <select value={direction} onChange={e => setDirection(e.target.value)}>
+          <option value="Веб-разработка">Веб-разработка</option>
+          <option value="Мобильная разработка">Мобильная разработка</option>
+          <option value="Разработка программ">Разработка программ</option>
+          <option value="Game-dev">Game-dev</option>
+          <option value="Скрипты">Скрипты</option>
+          <option value="Дизайн">Дизайн</option>
+          <option value="Другое">Другое</option>
+        </select>
+
+        <select value={lang} onChange={e => setLang(e.target.value)} disabled={direction === 'Дизайн'}>
+          <option value="Python">Python</option>
+          <option value="Js">Js</option>
+          <option value="Ts">Ts</option>
+          <option value="Bash">Bash</option>
+          <option value="C++">C++</option>
+          <option value="C#">C#</option>
+        </select>
+
+        {/* НОВАЯ СЕКЦИЯ: Загрузка медиафайлов */}
+        <div className="media-upload-section">
+          <button type="button" className="upload-trigger-btn" onClick={() => fileInputRef.current.click()}>
+            📎 Прикрепить фото/видео ({mediaFiles.length}/10)
+          </button>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            style={{ display: 'none' }} 
+            multiple 
+            accept="image/*,video/*" 
+            onChange={handleFileChange} 
+          />
+          
+          {/* Сетка превьюшек */}
+          {mediaFiles.length > 0 && (
+            <div className="form-media-preview-grid">
+              {mediaFiles.map((file, idx) => (
+                <div key={idx} className="preview-item-box">
+                  {file.type === 'video' ? (
+                    <video src={file.preview} muted />
+                  ) : (
+                    <img src={file.preview} alt="" />
+                  )}
+                  <button type="button" className="delete-media-btn" onClick={() => removeFile(idx)}>×</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <label className="checkbox-group">
+          <input type="checkbox" checked={disableComments} onChange={e => setDisableComments(e.target.checked)} />
+          комментарии отключить
+        </label>
+
+        <button type="submit" className="submit-project-btn">отправить</button>
+      </form>
+    </aside>
+  );
+}
+
+export default ProjectForm;
+
+
+=== FILE: frontend/src/components/MainPage/ProjectForm/ProjectForm.css ===
+/* ProjectForm.css */
+.project-form-sidebar {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  height: fit-content;
+}
+.form-title {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.mini-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mini-form input, .mini-form select, .mini-form textarea {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  outline: none;
+}
+.mini-form input:focus, .mini-form select:focus, .mini-form textarea:focus {
+  border-color: var(--accent-mint);
+}
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin: 4px 0;
+}
+.checkbox-group input { cursor: pointer; }
+.submit-project-btn {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  border: none;
+  padding: 12px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.submit-project-btn:hover { background-color: var(--accent-mint-hover); }
+/* Кнопка скрепки */
+.media-upload-section {
+  margin: 4px 0;
+  width: 100%;
+}
+
+.upload-trigger-btn {
+  width: 100%;
+  background-color: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.upload-trigger-btn:hover {
+  border-color: var(--accent-mint);
+  color: var(--text-main);
+  background-color: rgba(74, 242, 161, 0.02);
+}
+
+/* Сетка мини-превью (5 элементов в ряд) */
+.form-media-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.preview-item-box {
+  position: relative;
+  aspect-ratio: 1; /* Квадратные ячейки */
+  background-color: var(--bg-main);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.preview-item-box img, 
+.preview-item-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Обрезает контент под квадрат без искажения пропорций */
+}
+
+/* Кнопка крестика удаления медиафайла */
+.delete-media-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background-color: rgba(255, 107, 107, 0.85);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.delete-media-btn:hover {
+  background-color: #ff6b6b;
+}
+
+
+=== FILE: frontend/src/components/MainPage/MainPage.jsx ===
+import React, { useState } from 'react';
+import Header from './Header/Header';
+import SidebarRating from './SidebarRating/SidebarRating';
+import ProjectFilter from './ProjectFilter/ProjectFilter';
+import ProjectCard from './ProjectCard/ProjectCard';
+import ProjectForm from './ProjectForm/ProjectForm';
+import Footer from './Footer/Footer';
+import './MainPage.css';
+
+function MainPage({ 
+  user, 
+  setScreen, 
+  projects, 
+  activeDir, 
+  setActiveDir, 
+  activeLang, 
+  setActiveLang, 
+  onAddProject, 
+  onViewProjectDetails 
+}) {
+  const [searchValue, setSearchValue] = useState('');
+
+  // Локальный живой поиск по названию среди уже отфильтрованных бэкендом проектов
+  const searchedProjects = projects.filter(p => 
+    p.title.toLowerCase().includes(searchValue.toLowerCase())
+  );
+
+  return (
+    <div className="main-page-root" style={{backgroundColor: 'var(--bg-main)', minHeight: '100vh'}}>
+      <Header 
+        user={user} 
+        searchValue={searchValue} 
+        onSearchChange={setSearchValue} 
+        setScreen={setScreen} 
+        projects={projects}
+        onViewProjectDetails={onViewProjectDetails}
+        showDropdown={true}
+        ViewButtonMyProjects={true}
+      />
+      
+      <div className={`main-layout ${user.role === 'anonymous' ? 'anonymous-view' : ''}`}>
+        <SidebarRating refreshTrigger={projects.length} />
+
+        <div className="center-content-flow">
+          <ProjectFilter 
+            activeDir={activeDir} setActiveDir={setActiveDir} 
+            activeLang={activeLang} setActiveLang={setActiveLang} 
+          />
+
+          <div className="projects-list-container">
+            {searchedProjects.length > 0 ? (
+              searchedProjects.map(project => (
+                <ProjectCard 
+                  key={project.id} 
+                  project={project} 
+                  onViewDetails={onViewProjectDetails} 
+                />
+              ))
+            ) : (
+              <div style={{color: 'var(--text-muted)', textAlign: 'center', padding: '40px'}}>
+                Проектов не найдено на Chrt-Hub.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {user.role !== 'anonymous' && (
+          <ProjectForm 
+            onAddProject={onAddProject} 
+            authorName={user.username} 
+          />
+        )}
+      </div>
+
+      <Footer />
+    </div>
+  );
+}
+
+export default MainPage;
+
+
+=== FILE: frontend/src/components/MainPage/SidebarRating/SidebarRating.jsx ===
+import React, { useState, useEffect } from 'react';
+import { projectService } from '../../../services/projectService';
+import './SidebarRating.css';
+
+function SidebarRating({ refreshTrigger }) {
+  const [leaders, setLeaders] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // Подгружаем рейтинг при монтировании и при триггере (например, создании/удалении проекта)
+  useEffect(() => {
+    const loadRating = async () => {
+      try {
+        const data = await projectService.getLeaderboard();
+        setLeaders(data);
+      } catch (err) {
+        console.error('Ошибка рейтинга:', err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadRating();
+  }, [refreshTrigger]);
+
+  return (
+    <aside className="rating-sidebar">
+      <h3 className="rating-title">Рейтинг</h3>
+      <div className="rating-list">
+        {loading ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Загрузка топа...</div>
+        ) : leaders.length > 0 ? (
+          leaders.map((student, i) => (
+            <div key={i} className="rating-item">
+              <span className="user-name">{student.name}</span>
+              <span className="user-score">{student.count}</span>
+            </div>
+          ))
+        ) : (
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Пусто</div>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+export default SidebarRating;
+
+
+=== FILE: frontend/src/components/MainPage/SidebarRating/SidebarRating.css ===
+/* SidebarRating.css */
+.rating-sidebar {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  height: fit-content;
+}
+.rating-title {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.rating-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rating-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.user-name {
+  color: var(--text-main);
+  font-weight: 500;
+}
+.user-score {
+  background-color: rgba(74, 242, 161, 0.1);
+  color: var(--accent-mint);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+
+=== FILE: frontend/src/components/MainPage/Header/Header.jsx ===
+import { useState, useRef, useEffect } from 'react';
+import './Header.css';
+
+// Добавили пропс showDropdown в аргументы функции
+function Header({ user, onSearchChange, searchValue, setScreen, projects, onViewProjectDetails, showDropdown = false, ViewButtonMyProjects }) {
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Фильтруем проекты для подсказок только если включен флаг showDropdown
+  const searchSuggestions = showDropdown && projects && searchValue.trim() !== ''
+    ? projects.filter(p => p.title.toLowerCase().includes(searchValue.toLowerCase()))
+    : [];
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleSuggestionClick = (project) => {
+    setIsDropdownOpen(false);
+    onSearchChange(''); 
+    if (onViewProjectDetails) {
+      onViewProjectDetails(project); 
+    }
+  };
+
+  return (
+    <header className="main-header">
+      <div className="header-left">
+        {ViewButtonMyProjects && (
+          user.role !== 'anonymous' ? (
+            <button className="my-projects-btn" onClick={() => setScreen('my_projects')}>
+              Мои проекты
+            </button>
+          ) : (
+            <span className='user-badge'>Аноним</span>
+          )
+        )}
+
+        
+        
+        <div className="search-container" ref={dropdownRef}>
+          <input 
+            type="text" 
+            className="search-input" 
+            placeholder="Быстрый поиск проектов..." 
+            value={searchValue}
+            onChange={(e) => {
+              onSearchChange(e.target.value);
+              setIsDropdownOpen(true);
+            }}
+            onFocus={() => setIsDropdownOpen(true)}
+          />
+
+          {/* МЕНЮ ВЫЕДЕТ ТОЛЬКО ЕСЛИ ОНО РАЗРЕШЕНО ФЛАГОМ */}
+          {showDropdown && isDropdownOpen && searchSuggestions.length > 0 && (
+            <div className="search-autocomplete-dropdown">
+              {searchSuggestions.map(project => (
+                <div 
+                  key={project.id} 
+                  className="suggestion-item"
+                  onClick={() => handleSuggestionClick(project)}
+                >
+                  <div className="suggestion-info">
+                    <span className="suggestion-title">{project.title}</span>
+                    <span className="suggestion-author">от {project.author}</span>
+                  </div>
+                  <span className="suggestion-tag">{project.direction}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ЗАГЛУШКА ВЫЕДЕТ ТОЛЬКО ЕСЛИ ОНО РАЗРЕШЕНО ФЛАГОМ */}
+          {showDropdown && isDropdownOpen && searchValue.trim() !== '' && searchSuggestions.length === 0 && (
+            <div className="search-autocomplete-dropdown empty-result">
+              Ничего не найдено
+            </div>
+          )}
+        </div>
+      </div>
+{/* ... далее весь код кнопок авторизации в Header.jsx идет без изменений ... */}
+
+
+      <div className="header-right">
+        {user.role === 'anonymous' ? (
+          <>
+            
+            <button className="auth-nav-btn" onClick={() => setScreen('login')}>Войти</button>
+            <button className="auth-nav-btn" onClick={() => setScreen('register')}>Регистрация</button>
+          </>
+        ) : (
+          <>
+            <span className="user-badge">{user.username} <span>{user.projectCount}</span></span>
+            <button className="logout-btn" onClick={() => setScreen('auth_choice')}>Выйти</button>
+          </>
+        )}
+      </div>
+    </header>
+  );
+}
+
+export default Header;
+
+
+=== FILE: frontend/src/components/MainPage/Header/Header.css ===
+/* Header.css */
+.main-header {
+  background-color: var(--bg-card);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 40px;
+  position: relative;
+  top: 0;
+  z-index: 100;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.my-projects-btn {
+  background: none;
+  border: 1px solid var(--accent-purple);
+  color: var(--text-main);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+.my-projects-btn:hover {
+  background-color: rgba(139, 92, 246, 0.1);
+}
+.search-container {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 550px; /* Сделали шире */
+}
+.search-input {
+  width: 100%;
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 16px;
+  color: var(--text-main);
+  outline: none;
+}
+.search-input:focus {
+  border-color: var(--accent-mint);
+}
+.header-right {
+  display: flex;
+  align-items: center; /* Центрирует все элементы строго по вертикали */
+  gap: 20px;           /* Немного увеличим расстояние, чтобы текст "дышал" */
+}
+.user-badge {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  height: 100%;       /* Позволяет занять общую высоту контейнера */
+  line-height: 1;     /* Сбрасывает дефолтные отступы шрифта */
+}
+.user-badge span {
+  color: var(--accent-mint);
+  font-weight: 600;
+}
+.auth-nav-btn {
+  background: none;
+  border: none;
+  color: var(--text-main);
+  cursor: pointer;
+  font-size: 0.95rem;  /* Синхронизируем размер шрифта со спаном */
+  font-weight: 500;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+/* Выпадающее меню под полем поиска */
+.search-autocomplete-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+}
+
+/* Элемент списка подсказок */
+.suggestion-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.suggestion-item:last-child {
+  border-bottom: none;
+}
+
+/* Мягкая мятная подсветка при наведении */
+.suggestion-item:hover {
+  background-color: rgba(74, 242, 161, 0.04);
+}
+
+.suggestion-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestion-title {
+  color: var(--text-main);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.suggestion-author {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* Маленький тег направления справа */
+.suggestion-tag {
+  font-size: 0.75rem;
+  background-color: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.suggestion-item:hover .suggestion-tag {
+  color: var(--text-main);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Заглушка "Ничего не найдено" */
+.search-autocomplete-dropdown.empty-result {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.auth-nav-btn:hover {
+  color: var(--accent-mint);
+}
+.logout-btn {
+  background: none;
+  border: 1px solid #ff6b6b;
+  color: #ff6b6b;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.logout-btn:hover {
+  background-color: rgba(255, 107, 107, 0.1);
+}
+
+
+=== FILE: frontend/src/components/MainPage/MainPage.css ===
+/* MainPage.css */
+.main-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px; /* Слева рейтинг, по центру лента, справа форма */
+  gap: 30px;
+  max-width: 1600px;
+  width: 100%;
+  margin: 30px auto;
+  padding: 0 40px;
+  align-items: start;
+}
+
+/* Если зашел аноним, правая колонка исчезает, и лента занимает всё оставшееся место */
+.main-layout.anonymous-view {
+  grid-template-columns: 280px 1fr;
+}
+
+.center-content-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.projects-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.load-more-btn {
+  background: none;
+  border: 1px dashed var(--text-muted);
+  color: var(--text-main);
+  padding: 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+.load-more-btn:hover {
+  border-color: var(--accent-mint);
+  color: var(--accent-mint);
+}
+
+@media (max-width: 1200px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .main-layout.anonymous-view { grid-template-columns: 1fr; }
+}
+
+
+=== FILE: frontend/src/components/MainPage/ProjectFilter/ProjectFilter.jsx ===
+// ProjectFilter.jsx
+import './ProjectFilter.css';
+
+const DIRECTIONS = ["Все", "Веб-разработка", "Мобильная разработка", "Разработка программ", "Game-dev", "Скрипты", "Дизайн", "Другое"];
+const LANGUAGES = ["Все", "Python", "Js", "Ts", "Bash", "C++", "C#", "Java", "Kotlin", "Swift", "php", "rust", "go", "dart"];
+
+function ProjectFilter({ activeDir, setActiveDir, activeLang, setActiveLang }) {
+  return (
+    <section className="filters-section">
+      <div className="filter-row">
+        <span className="filter-label">Направление</span>
+        <div className="tags-container">
+          {DIRECTIONS.map(dir => (
+            <button 
+              key={dir} 
+              className={`tag-btn ${activeDir === dir ? 'active' : ''}`}
+              onClick={() => setActiveDir(dir)}
+            >
+              {dir}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="filter-row">
+        <span className="filter-label">Язык программирования</span>
+        <div className="tags-container">
+          {LANGUAGES.map(lang => (
+            <button 
+              key={lang} 
+              className={`tag-btn ${activeLang === lang ? 'active' : ''}`}
+              onClick={() => setActiveLang(lang)}
+            >
+              {lang}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export default ProjectFilter;
+
+
+=== FILE: frontend/src/components/MainPage/ProjectFilter/ProjectFilter.css ===
+/* ProjectFilter.css */
+.filters-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filter-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.tags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tag-btn {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+.tag-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-main);
+}
+.tag-btn.active {
+  background-color: rgba(139, 92, 246, 0.15);
+  border-color: var(--accent-purple);
+  color: var(--text-main);
+}
+
+
+=== FILE: frontend/src/components/LoginPage/LoginPage.jsx ===
+import { useState } from 'react';
+import './LoginPage.css';
+
+function LoginPage({ onBack, onSubmitSuccess }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!username || !password) {
+      alert('Заполните все поля!');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Если бэкенд вернул ошибку (401 и т.д.), выводим её текст
+        throw new Error(data.detail || 'Ошибка при входе');
+      }
+
+      // Сохраняем JWT-токен в localStorage, чтобы сессия не сбрасывалась
+      localStorage.setItem('token', data.access_token);
+      localStorage.setItem('user', JSON.stringify(data.user));
+
+      // Передаем данные наверх в App.jsx
+      onSubmitSuccess(data.user);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="login-page-wrapper">
+      <div className="bg-glow glow-top-left"></div>
+      <div className="bg-glow glow-bottom-right"></div>
+
+      <div className="login-page-container">
+        <h1 className="auth-title">Chrt-hub</h1>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Имя пользователя</label>
+            <input 
+              type="text" 
+              placeholder="Введите логин" 
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Пароль</label>
+            <input 
+              type="password" 
+              placeholder="Введите ваш пароль" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+
+          <button type="submit" className="submit-btn" disabled={isLoading}>
+            {isLoading ? 'Вход...' : 'Войти'}
+          </button>
+          
+          <button type="button" className="back-btn" onClick={onBack} disabled={isLoading}>
+            ← Назад к выбору
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default LoginPage;
+
+
+=== FILE: frontend/src/components/LoginPage/LoginPage.css ===
+@import '../RegisterPage/RegisterPage.css';
+
+.login-page-wrapper {
+  position: relative;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+.login-page-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 450px; /* Чуть уже, чем регистрация */
+  padding: 20px;
+}
+
+
+=== FILE: frontend/src/components/ProjectPage/ProjectPage.jsx ===
+import { useState, useEffect } from 'react';
+import './ProjectPage.css';
+import Header from '../MainPage/Header/Header';
+import Footer from '../MainPage/Footer/Footer';
+import { projectService } from '../../services/projectService'; // Подключаем сервис
+
+function ProjectPage({ project, currentUsername, onBack, projects, onViewProjectDetails, onOpenMyProjects, user }) {
+  const [mediaIndex, setMediaIndex] = useState(0);
+  const [isLightboxOpen, setIsLightboxOpen] = useState(false);
+  const [pageSearchValue, setPageSearchValue] = useState('');
+
+  // Заменяем хардкод на динамический стейт из БД
+  const [comments, setComments] = useState([]);
+  const [newCommentText, setNewCommentText] = useState('');
+  const [commentsLoading, setCommentsLoading] = useState(true);
+
+  const projectMedia = project?.media && project.media.length > 0 
+    ? project.media 
+    : ["https://unsplash.com"];
+
+  // Подгружаем комментарии при монтировании страницы или смене ID проекта
+  useEffect(() => {
+    if (project?.id) {
+      loadComments();
+    }
+  }, [project?.id]);
+
+  const loadComments = async () => {
+    try {
+      setCommentsLoading(true);
+      const data = await projectService.getComments(project.id);
+      setComments(data);
+    } catch (err) {
+      console.error(err.message);
+    } finally {
+      setCommentsLoading(false);
+    }
+  };
+
+  const nextMedia = () => setMediaIndex((prev) => (prev === projectMedia.length - 1 ? 0 : prev + 1));
+  const prevMedia = () => setMediaIndex((prev) => (prev === 0 ? projectMedia.length - 1 : prev - 1));
+
+  // Реальное голосование через API с оптимистичным обновлением интерфейса
+  const handleVote = async (commentId, voteType) => {
+    if (user.role === 'anonymous') {
+      alert('Голосовать могут только авторизованные студенты ЧРТ!');
+      return;
+    }
+
+    const isLikeTarget = voteType === 'like';
+    
+    try {
+      // Отправляем запрос на бэк
+      await projectService.voteComment(commentId, isLikeTarget);
+      // Просто пересобираем комменты из БД, чтобы получить идеальные точные счетчики
+      const updatedComments = await projectService.getComments(project.id);
+      setComments(updatedComments);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Добавление комментария через API
+  const handleAddComment = async (e) => {
+    e.preventDefault();
+    if (user.role === 'anonymous') {
+      alert('Анонимы не могут оставлять комментарии. Пожалуйста, войдите в аккаунт!');
+      return;
+    }
+    if (!newCommentText.trim()) return;
+
+    try {
+      const createdComment = await projectService.createComment(newCommentText, project.id);
+      // Добавляем новый коммент в список локально
+      setComments([...comments, createdComment]);
+      setNewCommentText('');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const isDesign = project?.direction === 'Дизайн';
+
+  return (
+    <div className="project-page-root" style={{backgroundColor: 'var(--bg-main)', minHeight: '100vh'}}>
+      <div className="bg-glow glow-top-left"></div>
+      <div className="bg-glow glow-bottom-right"></div>
+      <Header 
+        user={user} 
+        searchValue={pageSearchValue} 
+        onSearchChange={setPageSearchValue} 
+        setScreen={(targetScreen) => {
+          if (targetScreen === 'my_projects') {
+            onOpenMyProjects();
+          } else {
+            onBack();
+          }
+        }}
+        projects={projects} 
+        onViewProjectDetails={onViewProjectDetails} 
+        showDropdown={true}
+        ViewButtonMyProjects={true}
+      />
+
+      <div className="project-sub-header">
+        <button className="back-to-hub-btn" onClick={onBack}>
+          ← Назад в ленту
+        </button>
+        {isDesign ? (
+          <button className="github-top-btn disabled" disabled>Код недоступен (Дизайн)</button>
+        ) : (
+          <a href={project?.github || "https://github.com"} target="_blank" rel="noreferrer" className="github-top-btn">
+            Перейти на GitHub
+          </a>
+        )}
+      </div>
+
+      <div className="project-details-grid">
+        <main className="project-content-left">
+          <h2 className="project-main-title">{project?.title || "Название проекта"}</h2>
+          <p className="project-long-desc">{project?.fullDesc || project?.shortDesc || "Описание проекта..."}</p>
+
+          <div className="gallery-slider-container">
+            <button className="slider-arrow left" onClick={prevMedia}>‹</button>
+            <div className="slider-media-window" onClick={() => setIsLightboxOpen(true)}>
+              {projectMedia[mediaIndex].includes('video') || (typeof projectMedia[mediaIndex] === 'string' && projectMedia[mediaIndex].endsWith('.mp4')) ? (
+                <video src={projectMedia[mediaIndex]} muted autoPlay loop />
+              ) : (
+                <img src={projectMedia[mediaIndex]} alt="Скриншот проекта" />
+              )}
+            </div>
+            <button className="slider-arrow right" onClick={nextMedia}>›</button>
+          </div>
+
+          {/* Блок Комментариев */}
+          <section className="project-comments-wrapper">
+            <h3 className="comments-block-title">Комментарии ({comments.length})</h3>
+            
+            {project?.commentsDisabled ? (
+              <div style={{color: 'var(--text-muted)', fontStyle: 'italic', padding: '10px 0'}}>
+                Автор отключил комментарии к этому проекту.
+              </div>
+            ) : commentsLoading ? (
+              <div style={{color: 'var(--text-muted)'}}>Загрузка обсуждения...</div>
+            ) : (
+              <>
+                <div className="comments-flow-list">
+                  {comments.map((c) => (
+                    <div key={c.id} className="comment-node-box">
+                      <div className="comment-meta-row">
+                        <span>
+                          {c.author_name} ({c.author_group}) {c.author_name === currentUsername && <span style={{color: 'var(--accent-mint)'}}>(Вы)</span>}
+                        </span>
+                      </div>
+                      <p className="comment-text-body">{c.text}</p>
+                      
+                      <div className="comment-actions-bar">
+                        <div className="voting-buttons-pack">
+                          <button 
+                            type="button"
+                            className={`vote-action-btn liked ${c.user_vote === true ? 'active' : ''}`}
+                            onClick={() => handleVote(c.id, 'like')}
+                          >
+                            ▲ {c.likes_count}
+                          </button>
+                          <button 
+                            type="button"
+                            className={`vote-action-btn disliked ${c.user_vote === false ? 'active' : ''}`}
+                            onClick={() => handleVote(c.id, 'dislike')}
+                          >
+                            ▼ {c.dislikes_count}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {comments.length === 0 && (
+                    <div style={{color: 'var(--text-muted)', padding: '10px 0'}}>Будьте первым, кто оставит отзыв!</div>
+                  )}
+                </div>
+
+                {user.role !== 'anonymous' && (
+                  <form className="add-comment-form-block" onSubmit={handleAddComment}>
+                    <input 
+                      type="text" 
+                      placeholder="Напишите ваш отзыв или вопрос по коду..." 
+                      value={newCommentText}
+                      onChange={e => setNewCommentText(e.target.value)}
+                      maxLength={1000}
+                    />
+                    <button type="submit">Отправить</button>
+                  </form>
+                )}
+              </>
+            )}
+          </section>
+        </main>
+
+        <aside className="project-author-sidebar">
+          <div className="sidebar-heading">Автор проекта</div>
+          <div className="author-main-profile">
+            <div className="author-huge-name">{project?.author || "Студент ЧРТ"}</div>
+            <div className="author-group-tag">Группа: {project?.group_name || "ЧРТ"}</div>
+          </div>
+          <div className="author-rating-score-box">
+            <span style={{ color: 'var(--text-muted)' }}>Рейтинг на хабе:</span>
+            <span style={{ color: 'var(--accent-mint)', fontWeight: 700 }}>★ 100</span>
+          </div>
+          <div className="author-bio-text">
+            Студент Челябинского Радиотехнического Техникума. Вносит вклад в репозитории комьюнити Chrt-Hub.
+          </div>
+        </aside>
+      </div>
+
+      {isLightboxOpen && (
+        <div className="lightbox-modal-overlay" onClick={() => setIsLightboxOpen(false)}>
+          <div className="lightbox-content-box" onClick={e => e.stopPropagation()}>
+            <button type="button" className="lightbox-close-top-btn" onClick={() => setIsLightboxOpen(false)}>
+              ← Назад
+            </button>
+            {projectMedia[mediaIndex].includes('video') || (typeof projectMedia[mediaIndex] === 'string' && projectMedia[mediaIndex].endsWith('.mp4')) ? (
+              <video src={projectMedia[mediaIndex]} controls autoPlay />
+            ) : (
+              <img src={projectMedia[mediaIndex]} alt="Увеличенное превью" />
+            )}
+          </div>
+        </div>
+      )}
+      <Footer />
+    </div>
+  );
+}
+
+export default ProjectPage;
+
+
+=== FILE: frontend/src/components/ProjectPage/ProjectPage.css ===
+/* ================= ОСНОВНАЯ СЕТКА СТРАНИЦЫ (СТАНДАРТ MAIN PAGE) ================= */
+.project-details-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px; /* Четкие пропорции: контент + сайдбар */
+  gap: 30px;
+  width: 1600px;
+  margin: 20px auto 30px auto;
+  padding: 0 40px;
+  align-items: start;
+  box-sizing: border-box;
+}
+
+/* Навигация под хедером */
+.project-sub-header {
+  max-width: 1600px;
+  width: 100%;
+  margin: 24px auto 0 auto;
+  padding: 0 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.project-page-root {
+  width: 100%;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  flex-direction: column;
+}
+
+.project-page-root .main-footer {
+  margin-top: auto; /* Опускает футер вниз, если контента мало */
+}
+
+/* Кнопки навигации */
+.back-to-hub-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.back-to-hub-btn:hover {
+  color: var(--accent-mint);
+}
+
+.github-top-btn {
+  background-color: #238636;
+  color: #ffffff;
+  padding: 12px 32px;
+  border-radius: 8px;
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 1.05rem;
+  transition: background-color 0.2s, box-shadow 0.2s;
+  box-shadow: 0 4px 15px rgba(35, 134, 54, 0.2);
+}
+
+.github-top-btn:hover {
+  background-color: #2ea44f;
+  box-shadow: 0 4px 20px rgba(46, 164, 79, 0.4);
+}
+
+.github-top-btn.disabled {
+  background-color: #21262d;
+  color: #8b949e;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ================= ЛЕВЫЙ БЛОК - КОНТЕНТ ПРОЕКТА ================= */
+.project-content-left {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 40px; /* Просторный паддинг для широкого экрана */
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.project-main-title {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+
+.project-long-desc {
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: var(--text-main);
+  margin-bottom: 32px;
+  white-space: pre-wrap;
+}
+
+/* ================= СЛАЙДЕР ГАЛЕРЕИ (ШИРОКИЙ ЭКРАН) ================= */
+.gallery-slider-container {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 30px;
+  background-color: var(--bg-main);
+  border-radius: 8px;
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+  box-sizing: border-box;
+}
+
+.slider-media-window {
+  width: 90%; 
+  aspect-ratio: 16/9; /* Стандартный кинематографичный формат */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.slider-media-window img, 
+.slider-media-window video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.slider-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: rgba(22, 27, 34, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  z-index: 5;
+}
+
+.slider-arrow:hover {
+  border-color: var(--accent-mint);
+  color: var(--accent-mint);
+  background-color: var(--bg-card);
+}
+
+.slider-arrow.left { left: 20px; }
+.slider-arrow.right { right: 20px; }
+
+/* Кастомный аудиоплеер */
+.custom-audio-wrapper {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.audio-play-btn {
+  background-color: var(--accent-mint);
+  border: none;
+  color: #0d1117;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.audio-progress-bar {
+  flex: 1;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  position: relative;
+  cursor: pointer;
+}
+
+.audio-progress-fill {
+  height: 100%;
+  background-color: var(--accent-mint);
+  border-radius: 3px;
+  width: 30%;
+}
+
+/* ================= ПРАВЫЙ БЛОК: АВТОР ================= */
+.project-author-sidebar {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 320px; /* Идентично правой форме на главной странице */
+  box-sizing: border-box;
+}
+
+.sidebar-heading {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.author-main-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.author-huge-name {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.author-group-tag {
+  font-size: 0.95rem;
+  color: var(--accent-purple);
+  font-weight: 600;
+}
+
+.author-rating-score-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-main);
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.author-bio-text {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+/* ================= КОММЕНТАРИИ ================= */
+.project-comments-wrapper {
+  margin-top: 30px;
+}
+
+.comments-block-title {
+  font-size: 1.2rem;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.comments-flow-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.comment-node-box {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.comment-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.comment-author-identity {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+.comment-text-body {
+  color: var(--text-main);
+  line-height: 1.5;
+  font-size: 1rem;
+  margin-bottom: 14px;
+}
+
+.comment-actions-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.voting-buttons-pack {
+  display: flex;
+  gap: 8px;
+}
+
+.vote-action-btn {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.vote-action-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-main);
+}
+
+.vote-action-btn.liked.active {
+  border-color: var(--accent-mint);
+  color: var(--accent-mint);
+  background-color: rgba(74, 242, 161, 0.04);
+}
+
+.vote-action-btn.disliked.active {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.04);
+}
+
+.comment-trash-delete-btn {
+  background: none;
+  border: none;
+  color: #ff6b6b;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.comment-trash-delete-btn:hover {
+  text-decoration: underline;
+}
+
+/* Форма добавления коммента */
+.add-comment-form-block {
+  display: flex;
+  gap: 12px;
+}
+
+.add-comment-form-block input {
+  flex: 1;
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: var(--text-main);
+  font-size: 1rem;
+  outline: none;
+}
+
+.add-comment-form-block input:focus {
+  border-color: var(--accent-mint);
+}
+
+.add-comment-form-block button {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  border: none;
+  padding: 0 24px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.add-comment-form-block button:hover {
+  background-color: var(--accent-mint-hover);
+}
+
+/* ================= МОДАЛКА LIGHTBOX ================= */
+.lightbox-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(13, 17, 23, 0.95);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 9999;
+}
+
+.lightbox-content-box {
+  max-width: 90vw;
+  max-height: 85vh;
+  position: relative;
+}
+
+.lightbox-content-box img, 
+.lightbox-content-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+
+.lightbox-close-top-btn {
+  position: absolute;
+  top: -45px;
+  left: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.lightbox-close-top-btn:hover {
+  color: var(--text-main);
+}
+
+/* ================= МЯГКИЙ БЛУР-ФОН ================= */
+.my-projects-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.my-projects-wrapper .bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(160px);
+  opacity: 0.04;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.my-projects-wrapper .glow-top-left {
+  top: -100px;
+  left: 50%;
+  width: 600px;
+  height: 600px;
+  transform: translateX(-650px); 
+}
+
+.my-projects-wrapper .glow-bottom-right {
+  bottom: 10%;
+  left: 50%;
+  width: 650px;
+  height: 650px;
+  transform: translateX(0px); 
+}
+
+.my-projects-wrapper .main-layout {
+  position: relative;
+  z-index: 2;
+}
+
+/* ================= АДАПТИВНОСТЬ ПОД ЭКРАНЫ ================= */
+@media (max-width: 1600px) {
+  .project-details-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px; /* Четкие пропорции: контент + сайдбар */
+    gap: 30px;
+    width: 100vw;
+    margin: 20px auto 30px auto;
+    padding: 0 40px;
+    align-items: start;
+    box-sizing: border-box;
+  }
+}
+@media (max-width: 1400px) {
+  .project-details-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px; /* Четкие пропорции: контент + сайдбар */
+    gap: 30px;
+    width: 100vw;
+    margin: 20px auto 30px auto;
+    padding: 0 40px;
+    align-items: start;
+    box-sizing: border-box;
+  }
+}
+@media (max-width: 1200px) {
+  .project-details-grid { 
+    grid-template-columns: 1fr; 
+  }
+  .project-author-sidebar {
+    width: 100%;
+  }
+}
+
+@media (max-width: 1000px) {
+  .project-sub-header { 
+    flex-direction: column; 
+    gap: 16px; 
+    align-items: flex-start; 
+  }
+  .github-top-btn { 
+    width: 100%; 
+    text-align: center; 
+  }
+}
+
+
+=== FILE: frontend/src/components/MyProjectsPage/MyProjectsPage.css ===
+/* Импортируем проверенные стили сетки и блоков */
+@import '../MainPage/MainPage.css';
+@import '../ProjectPage/ProjectPage.css';
+
+.my-projects-wrapper {
+  background-color: var(--bg-main);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Переопределяем среднюю колонку, чтобы подхедер "Назад" стоял аккуратно */
+.my-projects-wrapper .back-row-margin {
+  margin-bottom: 20px;
+}
+
+/* Оставляем футер в самом низу страницы */
+.my-projects-wrapper .main-footer {
+  margin-top: auto;
+}
+/* ... все твои предыдущие @import и стили остаются сверху без изменений ... */
+
+/* ================= ИСПРАВЛЕННЫЕ СТИЛИ ДЛЯ КРУГОВ (БЕЗ ОБРЕЗАНИЯ) ================= */
+.my-projects-wrapper {
+  position: relative;
+  overflow: hidden; /* Защита от скроллов по обеим осям */
+}
+
+.my-projects-wrapper .bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(160px);   /* Увеличили размытие для еще большей мягкости */
+  opacity: 0.04;         /* Сделали каплю тусклее, чтобы не перебивать текст */
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Фиолетовое свечение (теперь привязано к левому краю контента) */
+.my-projects-wrapper .glow-top-left {
+  top: -100px;
+  left: 50%;
+  width: 600px;
+  height: 600px;
+  /* Сдвигаем на 800px влево от центра экрана (как раз под левый сайдбар) */
+  transform: translateX(-650px); 
+}
+
+/* Мятное свечение (теперь привязано к правому краю контента и НЕ ОБРЕЗАЕТСЯ) */
+.my-projects-wrapper .glow-bottom-right {
+  bottom: 10%;
+  left: 50%;
+  width: 650px;
+  height: 650px;
+  /* Сдвигаем на 150px вправо от центра экрана (аккурат под карточку профиля) */
+  transform: translateX(0px); 
+}
+
+/* Гарантируем, что основной контент будет четко поверх свечения */
+.my-projects-wrapper .main-layout {
+  position: relative;
+  z-index: 2;
+}
+
+
+=== FILE: frontend/src/components/MyProjectsPage/MyProjectsPage.jsx ===
+import { useState } from 'react';
+import Header from '../MainPage/Header/Header';
+import Footer from '../MainPage/Footer/Footer';
+import ProjectFilter from '../MainPage/ProjectFilter/ProjectFilter';
+import './MyProjectsPage.css';
+
+function MyProjectsPage({ user, projects, onBack, onDeleteProject, onViewProjectDetails }) {
+  const [searchValue, setSearchValue] = useState('');
+  const [activeDir, setActiveDir] = useState('Все');
+  const [activeLang, setActiveLang] = useState('Все');
+
+  // Фильтруем проекты: только текущего автора + живой поиск + теги
+  const myFilteredProjects = projects.filter(p => {
+    const isOwn = p.author === user.username;
+    const matchesSearch = p.title.toLowerCase().includes(searchValue.toLowerCase());
+    const matchesDir = activeDir === 'Все' || p.direction === activeDir;
+    const matchesLang = activeLang === 'Все' || p.lang.toLowerCase() === activeLang.toLowerCase();
+    return isOwn && matchesSearch && matchesDir && matchesLang;
+  });
+
+  return (
+    <div className="my-projects-wrapper">
+      <div className="bg-glow glow-top-left"></div>
+      <div className="bg-glow glow-bottom-right"></div>
+      {/* 1. СТАНДАРТНАЯ ШАПКА ИЗ MAIN PAGE */}
+      <Header 
+        user={user} 
+        searchValue={searchValue} 
+        onSearchChange={setSearchValue} 
+        setScreen={onBack} 
+        projects={projects}
+        onViewProjectDetails={onViewProjectDetails}
+        ViewButtonMyProjects={false}
+      />
+      
+      {/* 2. СТАНДАРТНАЯ СЕТКА GRID ИЗ MAIN PAGE (.main-layout) */}
+      <div className="main-layout">
+        
+        {/* ЛЕВАЯ КОЛОНКА: Кнопка назад вместо рейтинга */}
+        <aside className="back-row-margin">
+          <button className="back-to-hub-btn" onClick={onBack}>
+            ← Назад в ленту
+          </button>
+        </aside>
+
+        {/* ЦЕНТРАЛЬНАЯ КОЛОНКА: Лента фильтров и блоки проектов из MainPage */}
+        <div className="center-content-flow">
+          <ProjectFilter 
+            activeDir={activeDir} setActiveDir={setActiveDir} 
+            activeLang={activeLang} setActiveLang={setActiveLang} 
+          />
+
+          <div className="projects-list-container">
+            {myFilteredProjects.length > 0 ? (
+              myFilteredProjects.map(project => {
+                const isDesign = project.direction === 'Дизайн';
+                return (
+                  // Используем структуру оригинальной карточки проекта
+                  <article key={project.id} className="project-card-main">
+                    <div className="card-header-row">
+                      <h4 className="card-title">{project.title}</h4>
+                      <div className="card-tags">
+                        {!isDesign && <span className="badge lang">{project.lang}</span>}
+                        <span className="badge dir">{project.direction}</span>
+                      </div>
+                    </div>
+
+                    <p className="card-desc">{project.shortDesc}</p>
+
+                    <div className="card-footer-row">
+                      <div className="card-author">Автор: <span>{project.author}</span></div>
+                      <div className="card-actions">
+                        <button className="details-btn" onClick={() => onViewProjectDetails(project)}>
+                          Подробнее
+                        </button>
+                        <button 
+                          className="comment-trash-delete-btn" 
+                          style={{ marginLeft: '10px' }}
+                          onClick={() => {
+                            if (window.confirm(`Удалить проект "${project.title}"?`)) {
+                              onDeleteProject(project.id);
+                            }
+                          }}
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <div style={{color: 'var(--text-muted)', textAlign: 'center', padding: '40px'}}>
+                У вас пока нет проектов в этой категории.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ПРАВАЯ КОЛОНКА: Сайдбар профиля из ProjectPage (.project-author-sidebar) */}
+        <aside className="project-author-sidebar">
+          <div className="sidebar-heading">Ваш профиль</div>
+          
+          <div className="author-main-profile">
+            <div className="author-huge-name">{user.username}</div>
+            <div className="author-group-tag">Студент ЧРТ</div>
+          </div>
+
+          <div className="author-rating-score-box">
+            <span style={{ color: 'var(--text-muted)' }}>Ваш рейтинг:</span>
+            <span style={{ color: 'var(--accent-mint)', fontWeight: 700 }}>★ {user.projectCount * 100}</span>
+          </div>
+
+          <div className="author-bio-text">
+            {user.about || "Информация о навыках и стеке технологий не заполнена."}
+          </div>
+        </aside>
+
+      </div>
+
+      {/* 3. СТАНДАРТНЫЙ ПОДВАЛ ИЗ MAIN PAGE */}
+      <Footer />
+    </div>
+  );
+}
+
+export default MyProjectsPage;
+
+
+=== FILE: frontend/src/components/AuthPage/AuthPage.jsx ===
+import './AuthPage.css';
+
+function AuthPage({ onLoginClick, onRegisterClick, onAnonymousClick }) {
+  return (
+    <div className="auth-page-wrapper">
+      {/* Мягкие тусклые круги на заднем плане */}
+      <div className="bg-glow glow-top-left"></div>
+      <div className="bg-glow glow-bottom-right"></div>
+
+      {/* Основной контент страницы */}
+      <div className="auth-page-container">
+        
+        {/* Фирменный заголовок проекта */}
+        <h1 className="auth-title">Chrt-hub</h1>
+
+        <div className="auth-buttons-group">
+          
+          <button className="auth-choice-button" onClick={onLoginClick}>
+            Вход
+          </button>
+
+          <button className="auth-choice-button" onClick={onRegisterClick}>
+            Регистрация
+          </button>
+
+          <button className="auth-choice-button anonymous" onClick={onAnonymousClick}>
+            Аноним
+          </button>
+          
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default AuthPage;
+
+
+=== FILE: frontend/src/components/AuthPage/AuthPage.css ===
+/* Контейнер страницы теперь занимает весь экран и служит базой для абсолютных кругов */
+.auth-page-wrapper {
+  position: relative;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden; /* Чтобы размытые круги не создавали полос прокрутки */
+}
+
+/* ================= ЭФФЕКТНЫЙ РАЗМЫТЫЙ ФОН ================= */
+.bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(140px); /* Мощное размытие в кашу */
+  opacity: 0.06;       /* Делаем их очень тусклыми, чтобы не отвлекали */
+  pointer-events: none; /* Чтобы круги не мешали кликать по элементам */
+  z-index: 1;
+}
+
+/* Фиолетовый круг слева сверху */
+.glow-top-left {
+  top: -10%;
+  left: -10%;
+  width: 35vw;
+  height: 35vw;
+  background-color: #8b5cf6;
+}
+
+/* Мятный круг справа снизу */
+.glow-bottom-right {
+  bottom: -10%;
+  right: -10%;
+  width: 35vw;
+  height: 35vw;
+  background-color: var(--accent-mint);
+}
+
+/* ================= КОНТЕНТ ================= */
+.auth-page-container {
+  position: relative;
+  z-index: 2; /* Контент строго поверх фонового свечения */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 600px; /* Увеличили в 3 раза ширину на десктопе */
+  padding: 20px;
+}
+
+.auth-buttons-group {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.auth-choice-button {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  color: var(--text-main);
+  font-size: 1.3rem;
+  font-weight: 600;
+  padding: 26px; /* Чуть увеличили внутренний отступ для солидности */
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: center;
+}
+
+.auth-choice-button:hover {
+  border-color: var(--accent-mint);
+  background-color: rgba(74, 242, 161, 0.03);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 30px rgba(74, 242, 161, 0.08);
+}
+
+.auth-choice-button.anonymous {
+  border-style: dashed;
+}
+
+.auth-choice-button:active {
+  transform: translateY(-1px);
+}
+
+/* ================= АДАПТИВ ПОД МОБИЛКУ ================= */
+@media (max-width: 650px) {
+  .auth-page-container {
+    max-width: 100%;
+    padding: 0 24px; /* На мобилке кнопки аккуратно встанут по ширине экрана */
+  }
+
+  .auth-choice-button {
+    padding: 20px;
+    font-size: 1.15rem;
+  }
+  
+  .glow-top-left, .glow-bottom-right {
+    width: 60vw; /* На мобилке делаем круги чуть побольше относительно экрана */
+    height: 60vw;
+    filter: blur(80px);
+  }
+}
+
+/* ================= КОНТЕНТ ================= */
+.auth-page-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 600px;
+  padding: 20px;
+}
+
+/* Стили для заголовка chrt-hub */
+.auth-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  margin-bottom: 48px; /* Хороший отступ до кнопок, чтобы интерфейс "дышал" */
+  letter-spacing: -0.5px;
+  color: var(--text-main);
+  text-align: center;
+}
+
+.auth-buttons-group {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+/* ... код ховеров и адаптива ниже оставляем без изменений ... */
+
+/* Добавим уменьшение шрифта заголовка для мобилок в существующий медиа-запрос */
+@media (max-width: 650px) {
+  .auth-title {
+    font-size: 2.8rem;
+    margin-bottom: 32px;
+  }
+  /* ... остальной мобильный адаптив ... */
+}
+
+
+=== FILE: frontend/src/components/RegisterPage/RegisterPage.jsx ===
+import { useState } from 'react';
+import './RegisterPage.css';
+
+const CHRT_GROUPS = [
+  { value: "РК3-179", label: "РК3-179" }, { value: "РК3-277", label: "РК3-277" },
+  { value: "Р3-178", label: "Р3-178" }, { value: "Р3-276", label: "Р3-276" },
+  { value: "Ис-103", label: "Ис-103" }, { value: "Кб-102", label: "Кб-102" },
+  { value: "Кб-105", label: "Кб-105" }, { value: "Пр-104", label: "Пр-104" },
+  { value: "Пр-199", label: "Пр-199" }, { value: "Рк-101", label: "Рк-101" },
+  { value: "Рт-196", label: "Рт-196" }, { value: "Рт-197", label: "Рт-197" },
+  { value: "Са-198", label: "Са-198" }, { value: "Ис-293", label: "Ис-293" },
+  { value: "Кб-292", label: "Кб-292" }, { value: "Кб-295", label: "Кб-295" },
+  { value: "Пр-290", label: "Пр-290" }, { value: "Пр-294", label: "Пр-294" },
+  { value: "Рк-291", label: "Рк-291" }, { value: "Рт-287", label: "Рт-287" },
+  { value: "Рт-288", label: "Рт-288" }, { value: "Са-289", label: "Са-289" },
+  { value: "Ис-381", label: "Ис-381" }, { value: "Кб-384", label: "Кб-384" },
+  { value: "Кб-386", label: "Кб-386" }, { value: "Пр-382", label: "Пр-382" },
+  { value: "Рк-383", label: "Рк-383" }, { value: "Рр-385", label: "Рр-385" },
+  { value: "Рт-379", label: "Рт-379" }, { value: "Са-380", label: "Са-380" },
+  { value: "Ис-472", label: "Ис-472" }, { value: "Ис-477", label: "Ис-477" },
+  { value: "Кб-475", label: "Кб-475" }, { value: "Кб-478", label: "Кб-478" },
+  { value: "Пр-473", label: "Пр-473" }, { value: "Рт-470", label: "Рт-470" },
+  { value: "Рт-476", label: "Рт-476" }, { value: "Са-471", label: "Са-471" }
+];
+
+function RegisterPage({ onBack, onSubmitSuccess }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [group, setGroup] = useState('');
+  const [about, setAbout] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!username || !password || !group) {
+      alert('Пожалуйста, заполните обязательные поля!');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // 1. Шаг первый — шлем запрос на регистрацию
+      const regResponse = await fetch('http://localhost:8000/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, group_name: group, about })
+      });
+
+      const regData = await regResponse.json();
+
+      if (!regResponse.ok) {
+        throw new Error(regData.detail || 'Ошибка при регистрации');
+      }
+
+      // 2. Шаг второй — если регистрация прошла успешно, сразу автоматически делаем логин
+      const loginResponse = await fetch('http://localhost:8000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+
+      const loginData = await loginResponse.json();
+
+      if (loginResponse.ok) {
+        localStorage.setItem('token', loginData.access_token);
+        localStorage.setItem('user', JSON.stringify(loginData.user));
+        onSubmitSuccess(loginData.user);
+      } else {
+        alert('Аккаунт создан, но автоматический вход не удался. Попробуйте войти вручную.');
+        onBack();
+      }
+
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="register-page-wrapper">
+      <div className="bg-glow glow-top-left"></div>
+      <div className="bg-glow glow-bottom-right"></div>
+
+      <div className="register-page-container">
+        <h1 className="auth-title">Chrt-hub</h1>
+
+        <form className="register-form" onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Имя пользователя *</label>
+            <input 
+              type="text" 
+              placeholder="Придумайте логин" 
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Пароль *</label>
+            <input 
+              type="password" 
+              placeholder="Минимум 6 символов" 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Учебная группа *</label>
+            <select value={group} onChange={(e) => setGroup(e.target.value)} disabled={isLoading}>
+              <option value="">Выберите вашу группу</option>
+              {CHRT_GROUPS.map((g) => (
+                <option key={g.value} value={g.value}>{g.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>О себе (необязательно)</label>
+            <textarea 
+              placeholder="Расскажите о своих навыках или стеке технологий..." 
+              value={about}
+              onChange={(e) => setAbout(e.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+
+          <button type="submit" className="submit-btn" disabled={isLoading}>
+            {isLoading ? 'Создание аккаунта...' : 'Создать аккаунт'}
+          </button>
+          
+          <button type="button" className="back-btn" onClick={onBack} disabled={isLoading}>
+            ← Назад к выбору
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+export default RegisterPage;
+
+
+=== FILE: frontend/src/components/RegisterPage/RegisterPage.css ===
+.register-page-wrapper {
+  position: relative;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+.register-page-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 500px; /* Оптимально для формы */
+  padding: 20px;
+}
+
+.register-form {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Красивые темные инпуты в стиле GitHub */
+.form-group input, 
+.form-group select, 
+.form-group textarea {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: var(--text-main);
+  padding: 14px;
+  font-size: 1rem;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.form-group input:focus, 
+.form-group select:focus, 
+.form-group textarea:focus {
+  border-color: var(--accent-mint);
+  box-shadow: 0 0 10px rgba(74, 242, 161, 0.15);
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 90px;
+}
+
+/* Кнопка отправки формы */
+.submit-btn {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  font-size: 1.1rem;
+  font-weight: 700;
+  padding: 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: all 0.2s ease;
+}
+
+.submit-btn:hover {
+  background-color: var(--accent-mint-hover);
+  box-shadow: 0 0 20px rgba(74, 242, 161, 0.3);
+}
+
+/* Кнопка Назад */
+.back-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  cursor: pointer;
+  align-self: center;
+  margin-top: 16px;
+  transition: color 0.2s ease;
+}
+
+.back-btn:hover {
+  color: var(--text-main);
+}
+
+@media (max-width: 550px) {
+  .register-page-container { padding: 16px; }
+  .register-form { padding: 24px; }
+}
+
+
+=== FILE: frontend/src/components/IntroAnim/IntroAnim.jsx ===
+import { useState, useEffect } from 'react';
+import './IntroAnim.css';
+
+function IntroAnim({ onAnimComplete }) {
+  const [status, setStatus] = useState(''); // '', 'fade-text', 'slide-out'
+
+  useEffect(() => {
+    // Шаг 1: Ждем пока текст прилетит и посветит (2.4 секунды)
+    const textTimer = setTimeout(() => {
+      setStatus('fade-text');
+    }, 1700);
+
+    // Шаг 2: Через 400мс после затухания текста раздвигаем створки экрана
+    const gateTimer = setTimeout(() => {
+      setStatus('fade-text slide-out');
+    }, 2100);
+
+    const fadeScreenTimer = setTimeout(() => {
+      setStatus('fade-text slide-out fade-out-screen');
+    }, 2700);
+
+    // Шаг 3: Полностью выгружаем интро из памяти, когда створки улетели за экран (1.2 секунды на анимацию)
+    const completeTimer = setTimeout(() => {
+      onAnimComplete();
+    }, 4000);
+
+    return () => {
+      clearTimeout(textTimer);
+      clearTimeout(gateTimer);
+      clearTimeout(completeTimer);
+    };
+  }, [onAnimComplete]);
+
+  return (
+    <div className={`intro-overlay ${status}`}>
+      {/* Левая створка */}
+      <div className="intro-gate gate-left"></div>
+      
+      {/* Неоновый текст по центру */}
+      <div className="intro-text-box">
+        <h1 className="intro-neon-logo">chrt-hub</h1>
+      </div>
+      
+      {/* Правая створка */}
+      <div className="intro-gate gate-right"></div>
+    </div>
+  );
+}
+
+export default IntroAnim;
+
+
+=== FILE: frontend/src/components/IntroAnim/IntroAnim.css ===
+.intro-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 99999;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  /* Добавляем плавность изменения прозрачности для всего экрана в 1 секунду */
+  transition: opacity 1s ease; 
+  opacity: 1;
+}
+.intro-overlay.fade-out-screen {
+  opacity: 0;
+}
+
+/* Половинки экрана (створки) */
+.intro-gate {
+  position: absolute;
+  top: 0;
+  width: 50vw;
+  height: 100vh;
+  background-color: #05070a; /* Ультра-темный глубокий цвет для интриги */
+  transition: transform 1.2s cubic-bezier(0.77, 0, 0.175, 1);
+  z-index: 1;
+}
+
+.gate-left {
+  left: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.gate-right {
+  right: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+/* Когда запускается финал — створки разъезжаются по бокам */
+.intro-overlay.slide-out .gate-left {
+  transform: translateX(-100%);
+}
+
+.intro-overlay.slide-out .gate-right {
+  transform: translateX(100%);
+}
+
+/* Контейнер для неонового текста */
+.intro-text-box {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  transform: translateY(-100vh); /* Стартуем за границей экрана сверху */
+  animation: drop-and-glow 2.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.intro-neon-logo {
+  font-size: 5rem;
+  font-weight: 900;
+  letter-spacing: -1px;
+  color: #fff;
+  text-transform: lowercase;
+  /* Мягкое неоновое мятно-фиолетовое свечение */
+  text-shadow: 
+    0 0 10px rgba(74, 242, 161, 0.3),
+    0 0 20px rgba(74, 242, 161, 0.2),
+    0 0 40px rgba(139, 92, 246, 0.2);
+}
+
+/* Плавное исчезновение текста перед открытием створок */
+.intro-overlay.fade-text .intro-text-box {
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+/* ================= АНИМАЦИИ KEYFRAMES ================= */
+
+/* Текст выезжает сверху, мягко тормозит в центре и наливается неоном */
+@keyframes drop-and-glow {
+  0% {
+    transform: translateY(-100vh);
+    opacity: 0;
+  }
+  40% {
+    transform: translateY(0);
+    opacity: 1;
+    text-shadow: 0 0 5px rgba(74, 242, 161, 0.2);
+  }
+  60% {
+    /* Легкий эффект мерцания неона при остановке */
+    text-shadow: 
+      0 0 15px rgba(74, 242, 161, 0.6),
+      0 0 30px rgba(139, 92, 246, 0.4);
+  }
+  80% {
+    text-shadow: 
+      0 0 10px rgba(74, 242, 161, 0.4),
+      0 0 20px rgba(139, 92, 246, 0.3);
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Адаптив для мобилок */
+@media (max-width: 600px) {
+  .intro-neon-logo {
+    font-size: 3.2rem;
+  }
+}
+
+
+=== FILE: frontend/src/index.css ===
+:root {
+  --bg-main: #0d1117;       /* Глубокий темный фон как на GitHub */
+  --bg-card: #161b22;       /* Фон карточек и панелей */
+  --text-main: #e6edf0;     /* Мягкий белый текст */
+  --text-muted: #8b949e;    /* Серый текст для описаний */
+  --accent-mint: #4af2a1;   /* Яркая, но мягкая неоновая мята */
+  --accent-mint-hover: #3cd48b; /* Мята при наведении */
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+
+=== FILE: frontend/src/main.jsx ===
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+=== FILE: frontend/src/App.css ===
+.welcome-container {
+  max-width: 1200px; /* Немного расширим, чтобы слайдер смотрелся масштабнее */
+  width: 100%;
+  padding: 40px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+}
+
+.welcome-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  margin-bottom: 24px;
+  letter-spacing: -0.5px;
+}
+
+.welcome-description {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 750px;
+  margin-bottom: 40px;
+}
+
+.start-button {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  font-size: 1.2rem;
+  font-weight: 700;
+  padding: 16px 64px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 20px rgba(74, 242, 161, 0.2);
+  margin-bottom: 60px;
+  z-index: 10; /* Чтобы кнопка всегда была кликабельной поверх масок */
+}
+
+.start-button:hover {
+  background-color: var(--accent-mint-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(74, 242, 161, 0.4);
+}
+
+/* ================= СЛАЙДЕР С ГРАДИЕНТАМИ ================= */
+
+/* Главная оболочка слайдера с эффектом размытия по бокам */
+.slider-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 1050px;
+  margin: 0 auto;
+  overflow: hidden;
+  /* Градиентные маски по краям, уходящие в цвет фона сайта */
+  mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  padding: 10px 0;
+}
+
+/* Движущаяся лента карточек */
+.slider-track {
+  display: flex;
+  gap: 24px;
+  transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1); /* Плавный и мягкий сдвиг */
+  width: 100%;
+}
+
+/* Карточка (теперь они фиксированной ширины, чтобы слайдер считал шаги) */
+.preview-card {
+  flex: 0 0 calc(33.333% - 16px); /* Ровно 3 карточки во весь экран с учетом gap */
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 32px 24px;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  box-sizing: border-box;
+  transition: transform 0.3s ease, border-color 0.3s ease;
+}
+
+.preview-card:hover {
+  border-color: rgba(74, 242, 161, 0.3);
+  transform: translateY(-4px);
+}
+
+.preview-card h3 {
+  font-size: 1.25rem;
+  margin-bottom: 12px;
+  color: var(--text-main);
+}
+
+.preview-card p {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+/* Адаптивность */
+@media (max-width: 900px) {
+  .preview-card {
+    flex: 0 0 calc(50% - 12px); /* 2 карточки на средних экранах */
+  }
+  .slider-wrapper {
+    mask-image: linear-gradient(to right, transparent, #000 5%, #000 95%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 5%, #000 95%, transparent);
+  }
+}
+
+@media (max-width: 600px) {
+  .preview-card {
+    flex: 0 0 100%; /* 1 карточка на телефонах */
+  }
+}
+
+
+=== FILE: frontend/src/App.jsx ===
+import { useState, useEffect } from 'react';
+import AuthPage from './components/AuthPage/AuthPage';
+import RegisterPage from './components/RegisterPage/RegisterPage';
+import LoginPage from './components/LoginPage/LoginPage';
+import MainPage from './components/MainPage/MainPage'; 
+import ProjectPage from './components/ProjectPage/ProjectPage';
+import MyProjectsPage from './components/MyProjectsPage/MyProjectsPage';
+import IntroAnim from './components/IntroAnim/IntroAnim';
+import { projectService } from './services/projectService'; // Подключаем наш сервис
+import './App.css';
+
+const CARDS_DATA = [
+  { id: 1, title: "Веб-разработка", desc: "Создавайте адаптивные сайты и сервисы. Интегрируйте фронтенд на React с асинхронным бэкендом." },
+  { id: 2, title: "Рейтинг студентов", desc: "Загружайте проекты, собирайте отзывы комьюнити ЧРТ и поднимайтесь в топ лучших." },
+  { id: 3, title: "Дизайн & UI/UX", desc: "Удобная демонстрация ваших макетов из Figma, интерфейсов и графических концептов." },
+  { id: 4, title: "Game-Dev", desc: "Публикуйте свои игры, скриншоты геймплея и делитесь билдами с другими студентами." },
+  { id: 5, title: "Скрипты и Автоматизация", desc: "Пишете полезных ботов на Python или Bash-скрипты? Вашему коду здесь тоже рады." },
+  { id: 6, title: "Мобильная разработка", desc: "Показывайте приложения под Android и iOS на Kotlin, Swift, Flutter или React Native." }
+];
+
+const INITIAL_PROJECTS = [
+  { 
+    id: 1, 
+    title: "Chrt Расписание Боты", 
+    shortDesc: "Автоматический парсер расписания занятий групп с отправкой пушей.", 
+    fullDesc: "Это масштабная экосистема для студентов ЧРТ. Включает в себя скрипт на Python, асинхронную базу данных и систему мгновенных уведомлений об изменениях в расписании пар кураторов.", 
+    direction: "Скрипты", 
+    lang: "Python", 
+    author: "Иванов И.А.", 
+    github: "https://github.com", 
+    media: [], 
+    commentsDisabled: false 
+  },
+  { 
+    id: 2, 
+    title: "Сайт приемной комиссии", 
+    shortDesc: "Полный UI/UX редизайн главной страницы для абитуриентов ЧРТ.", 
+    fullDesc: "Проект редизайна официальной страницы приемной комиссии. Сделан упор на темные современные темы и адаптивность под мобильные девайсы будущих первокурсников.", 
+    direction: "Дизайн", 
+    lang: "Js", 
+    author: "Петров К.М.", 
+    github: "", 
+    media: [], 
+    commentsDisabled: false 
+  },
+  { 
+    id: 3, 
+    title: "Игра про Путрина", 
+    shortDesc: "Полный UI/UX редизайн главной игры fnaf для абитуриентов ЧРТ.", 
+    fullDesc: "Проект редизайна официальной fnaf. Сделан упор на темные современные темы и адаптивность под мобильные девайсы будущих первокурсников.", 
+    direction: "Game-dev", 
+    lang: "C++", 
+    author: "Шепелев В.А.", 
+    github: "https://github.com", 
+    media: [], 
+    commentsDisabled: false 
+  }
+];
+
+function App() {
+  // Экраны: 'welcome' | 'auth_choice' | 'login' | 'register' | 'main_page'
+  const [currentScreen, setCurrentScreen] = useState('welcome');
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  const [user, setUser] = useState(() => {
+    const savedUser = localStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : { role: 'anonymous', username: 'аноним', projectCount: 0 };
+  });
+
+  const [projects, setProjects] = useState([]);
+  const [selectedProject, setSelectedProject] = useState(null); 
+  const [showIntro, setShowIntro] = useState(true);
+
+  const [activeDir, setActiveDir] = useState('Все');
+  const [activeLang, setActiveLang] = useState('Все');
+
+  
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const savedUser = localStorage.getItem('user');
+    if (token && savedUser) {
+      setUser(JSON.parse(savedUser));
+      setCurrentScreen('main_page');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentScreen === 'main_page' || currentScreen === 'project_detail' || currentScreen === 'my_projects') {
+      const loadAllProjects = async () => {
+        try {
+          const data = await projectService.getAllProjects(activeDir, activeLang);
+          setProjects(data);
+          
+          // Актуализируем счетчик собственных проектов у вошедшего юзера
+          if (user.role !== 'anonymous') {
+            const myCount = data.filter(p => p.author === user.username).length;
+            setUser(prev => ({ ...prev, projectCount: myCount }));
+          }
+        } catch (err) {
+          console.error(err.message);
+        }
+      };
+      loadAllProjects();
+    }
+  }, [currentScreen, activeDir, activeLang, user.username]);
+
+  const handleAuthSuccess = (userData) => {
+    const loggedUser = {
+      role: 'student',
+      username: userData.username,
+      projectCount: 0, 
+      about: userData.about || '',
+      group_name: userData.group_name
+    };
+    setUser(loggedUser);
+    localStorage.setItem('user', JSON.stringify(loggedUser)); // Перезаписываем со структурой ролей
+    setCurrentScreen('main_page');
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser({ role: 'anonymous', username: 'аноним', projectCount: 0 });
+    setCurrentScreen('auth_choice');
+  };
+  
+
+  // Функция для увеличения счетчика проектов у вошедшего студента
+  const updateUserProjectCount = () => {
+    setUser(prev => ({ ...prev, projectCount: prev.projectCount + 1 }));
+  };
+
+  // Переход 2: Студент нажал кнопку "Аноним"
+  const handleAnonymousTransition = () => {
+    setUser({ role: 'anonymous', username: 'аноним', projectCount: 0 });
+    setCurrentScreen('main_page');
+  };
+
+  const handleAddProject = async (newProjectData) => {
+    try {
+      const savedProject = await projectService.createProject(newProjectData);
+      setProjects(prev => [savedProject, ...prev]);
+      setUser(prev => ({ ...prev, projectCount: prev.projectCount + 1 }));
+      alert('Проект успешно опубликован на Chrt-Hub!');
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Метод удаления проекта через API
+  const handleApiDeleteProject = async (id) => {
+    try {
+      await projectService.deleteProject(id);
+      setProjects(prev => prev.filter(p => p.id !== id));
+      setUser(prev => ({ ...prev, projectCount: Math.max(0, prev.projectCount - 1) }));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  // Таймер приветственного слайдера
+  useEffect(() => {
+    if (currentScreen !== 'welcome') return;
+    const interval = setInterval(() => {
+      setCurrentIndex((prevIndex) => {
+        const maxIndex = CARDS_DATA.length - 3;
+        return prevIndex >= maxIndex ? 0 : prevIndex + 1;
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [currentScreen]);
+
+  return (
+    <>
+      {showIntro && <IntroAnim onAnimComplete={() => setShowIntro(false)} />}
+      {/* 1. ЭКРАН ПРИВЕТСТВИЯ */}
+      {!showIntro && currentScreen === 'welcome' && (
+        <main className="welcome-container">
+          <h1 className="welcome-title">Chrt-hub</h1>
+          <p className="welcome-description">
+            Локальная форма для студентов и преподавателей Челябинского Радиотехнического Техникума. 
+            Публикуйте свои лучшие веб-сервисы, десктопные приложения, игры и дизайн-концепты.
+          </p>
+          <button className="start-button" onClick={() => setCurrentScreen('auth_choice')}>
+            Начать!
+          </button>
+          
+          <div className="slider-wrapper">
+            <div 
+              className="slider-track"
+              style={{ transform: `translateX(calc(-${currentIndex * (100 / 3)}% - ${currentIndex * 8}px))` }}
+            >
+              {CARDS_DATA.map((card) => (
+                <article key={card.id} className="preview-card">
+                  <h3>{card.title}</h3>
+                  <p>{card.desc}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* 2. ЭКРАН ВЫБОРА (Вход / Регистрация / Аноним) */}
+      {!showIntro && currentScreen === 'auth_choice' && (
+        <AuthPage 
+          onLoginClick={() => setCurrentScreen('login')}
+          onRegisterClick={() => setCurrentScreen('register')}
+          onAnonymousClick={handleAnonymousTransition}
+        />
+      )}
+
+      {!showIntro && currentScreen === 'login' && (
+        <LoginPage onBack={() => setCurrentScreen('auth_choice')} onSubmitSuccess={handleAuthSuccess} />
+      )}
+
+      {!showIntro && currentScreen === 'register' && (
+        <RegisterPage onBack={() => setCurrentScreen('auth_choice')} onSubmitSuccess={handleAuthSuccess} />
+      )}
+
+      {!showIntro && currentScreen === 'main_page' && (
+        <MainPage 
+          user={user} 
+          setScreen={(screen) => screen === 'auth_choice' ? handleLogout() : setCurrentScreen(screen)}
+          projects={projects}
+          // Прокидываем управление фильтрами наверх в App.jsx для триггера useEffect fetch-запросов
+          activeDir={activeDir} setActiveDir={setActiveDir}
+          activeLang={activeLang} setActiveLang={setActiveLang}
+          onAddProject={handleAddProject}
+          onViewProjectDetails={(project) => {
+            setSelectedProject(project);
+            setCurrentScreen('project_detail');
+          }}
+        />
+      )}
+
+      {!showIntro && currentScreen === 'project_detail' && (
+        <ProjectPage 
+          project={selectedProject} 
+          projects={projects} 
+          currentUsername={user.username}
+          user={user}
+          onBack={() => setCurrentScreen('main_page')}
+          onViewProjectDetails={(nextProject) => setSelectedProject(nextProject)} 
+          onOpenMyProjects={() => setCurrentScreen('my_projects')}
+        />
+      )}
+
+      {!showIntro && currentScreen === 'my_projects' && (
+        <MyProjectsPage 
+          user={user} 
+          projects={projects} 
+          onBack={() => setCurrentScreen('main_page')} 
+          onDeleteProject={handleApiDeleteProject}
+          onViewProjectDetails={(project) => {
+            setSelectedProject(project);
+            setCurrentScreen('project_detail');
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+export default App;
+
+

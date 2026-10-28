@@ -1,0 +1,98 @@
+/* ProjectCard.css */
+.project-card-main {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.card-title {
+  font-size: 1.3rem;
+  color: var(--text-main);
+}
+.card-tags {
+  display: flex;
+  gap: 8px;
+}
+.badge {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.badge.lang { background-color: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
+.badge.dir { background-color: rgba(255, 255, 255, 0.08); color: var(--text-main); }
+
+.card-desc {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.card-footer-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+.card-author {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+.card-author span { color: var(--text-main); }
+
+.card-actions {
+  display: flex;
+  gap: 12px;
+}
+.details-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-main);
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.gh-btn {
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+.gh-btn.active { background-color: #238636; color: #fff; }
+.gh-btn.disabled { background-color: #21262D; color: #8b949e; cursor: not-allowed; }
+.project-like-btn {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.project-like-btn:hover {
+  border-color: #ff6b6b;
+  color: var(--text-main);
+  background-color: rgba(255, 107, 107, 0.02);
+}
+
+.project-like-btn.active {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
+}
+

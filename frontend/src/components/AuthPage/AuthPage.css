@@ -1,0 +1,148 @@
+/* Контейнер страницы теперь занимает весь экран и служит базой для абсолютных кругов */
+.auth-page-wrapper {
+  position: relative;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden; /* Чтобы размытые круги не создавали полос прокрутки */
+}
+
+/* ================= ЭФФЕКТНЫЙ РАЗМЫТЫЙ ФОН ================= */
+.bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(140px); /* Мощное размытие в кашу */
+  opacity: 0.06;       /* Делаем их очень тусклыми, чтобы не отвлекали */
+  pointer-events: none; /* Чтобы круги не мешали кликать по элементам */
+  z-index: 1;
+}
+
+/* Фиолетовый круг слева сверху */
+.glow-top-left {
+  top: -10%;
+  left: -10%;
+  width: 35vw;
+  height: 35vw;
+  background-color: #8b5cf6;
+}
+
+/* Мятный круг справа снизу */
+.glow-bottom-right {
+  bottom: -10%;
+  right: -10%;
+  width: 35vw;
+  height: 35vw;
+  background-color: var(--accent-mint);
+}
+
+/* ================= КОНТЕНТ ================= */
+.auth-page-container {
+  position: relative;
+  z-index: 2; /* Контент строго поверх фонового свечения */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 600px; /* Увеличили в 3 раза ширину на десктопе */
+  padding: 20px;
+}
+
+.auth-buttons-group {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.auth-choice-button {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  color: var(--text-main);
+  font-size: 1.3rem;
+  font-weight: 600;
+  padding: 26px; /* Чуть увеличили внутренний отступ для солидности */
+  cursor: pointer;
+  width: 100%;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: center;
+}
+
+.auth-choice-button:hover {
+  border-color: var(--accent-mint);
+  background-color: rgba(74, 242, 161, 0.03);
+  transform: translateY(-3px);
+  box-shadow: 0 8px 30px rgba(74, 242, 161, 0.08);
+}
+
+.auth-choice-button.anonymous {
+  border-style: dashed;
+}
+
+.auth-choice-button:active {
+  transform: translateY(-1px);
+}
+
+/* ================= АДАПТИВ ПОД МОБИЛКУ ================= */
+@media (max-width: 650px) {
+  .auth-page-container {
+    max-width: 100%;
+    padding: 0 24px; /* На мобилке кнопки аккуратно встанут по ширине экрана */
+  }
+
+  .auth-choice-button {
+    padding: 20px;
+    font-size: 1.15rem;
+  }
+  
+  .glow-top-left, .glow-bottom-right {
+    width: 60vw; /* На мобилке делаем круги чуть побольше относительно экрана */
+    height: 60vw;
+    filter: blur(80px);
+  }
+}
+
+/* ================= КОНТЕНТ ================= */
+.auth-page-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  max-width: 600px;
+  padding: 20px;
+}
+
+/* Стили для заголовка chrt-hub */
+.auth-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  margin-bottom: 48px; /* Хороший отступ до кнопок, чтобы интерфейс "дышал" */
+  letter-spacing: -0.5px;
+  color: var(--text-main);
+  text-align: center;
+}
+
+.auth-buttons-group {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+/* ... код ховеров и адаптива ниже оставляем без изменений ... */
+
+/* Добавим уменьшение шрифта заголовка для мобилок в существующий медиа-запрос */
+@media (max-width: 650px) {
+  .auth-title {
+    font-size: 2.8rem;
+    margin-bottom: 32px;
+  }
+  /* ... остальной мобильный адаптив ... */
+}

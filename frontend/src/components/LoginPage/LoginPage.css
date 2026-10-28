@@ -1,0 +1,22 @@
+@import '../RegisterPage/RegisterPage.css';
+
+.login-page-wrapper {
+  position: relative;
+  width: 100vw;
+  min-height: 100vh;
+  background-color: var(--bg-main);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+
+.login-page-container {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 450px; /* Чуть уже, чем регистрация */
+  padding: 20px;
+}

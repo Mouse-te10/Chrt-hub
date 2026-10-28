@@ -1,0 +1,39 @@
+/* SidebarRating.css */
+.rating-sidebar {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  height: fit-content;
+}
+.rating-title {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.rating-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rating-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.user-name {
+  color: var(--text-main);
+  font-weight: 500;
+}
+.user-score {
+  background-color: rgba(74, 242, 161, 0.1);
+  color: var(--accent-mint);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}

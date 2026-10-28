@@ -1,0 +1,48 @@
+/* === FILE: frontend/src/components/MainPage/MainPage.css === */
+
+/* Корневой контейнер главной страницы растягиваем на весь экран */
+.main-page-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh; /* Занимает не менее 100% высоты видимой области */
+  background-color: var(--bg-main);
+  box-sizing: border-box;
+}
+
+/* Основная сетка контента */
+.main-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px; 
+  gap: 30px;
+  max-width: 1600px;
+  width: 100%;
+  margin: 30px auto;
+  padding: 0 40px;
+  align-items: start;
+  
+  /* flex-grow: 1 заставит контентную часть занять всё свободное место, 
+     выталкивая футер в самый низ страницы */
+  flex-grow: 1; 
+}
+
+/* Если зашел аноним, правая колонка исчезает */
+.main-layout.anonymous-view {
+  grid-template-columns: 280px 1fr;
+}
+
+.center-content-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.projects-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+@media (max-width: 1200px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .main-layout.anonymous-view { grid-template-columns: 1fr; }
+}

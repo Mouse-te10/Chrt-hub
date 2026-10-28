@@ -1,0 +1,23 @@
+/* Footer.css */
+.main-footer {
+  background-color: var(--bg-card);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 20px 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto; 
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  border-radius: 12px;
+  margin-bottom: 10px;
+}
+.footer-links {
+  display: flex;
+  gap: 24px;
+}
+.footer-links a {
+  color: var(--accent-mint);
+  text-decoration: none;
+}
+.footer-links a:hover { text-decoration: underline; }

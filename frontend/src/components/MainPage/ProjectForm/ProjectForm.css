@@ -1,0 +1,124 @@
+/* ProjectForm.css */
+.project-form-sidebar {
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 20px;
+  height: fit-content;
+}
+.form-title {
+  font-size: 1.1rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.mini-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mini-form input, .mini-form select, .mini-form textarea {
+  background-color: var(--bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  outline: none;
+}
+.mini-form input:focus, .mini-form select:focus, .mini-form textarea:focus {
+  border-color: var(--accent-mint);
+}
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin: 4px 0;
+}
+.checkbox-group input { cursor: pointer; }
+.submit-project-btn {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  border: none;
+  padding: 12px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.submit-project-btn:hover { background-color: var(--accent-mint-hover); }
+/* Кнопка скрепки */
+.media-upload-section {
+  margin: 4px 0;
+  width: 100%;
+}
+
+.upload-trigger-btn {
+  width: 100%;
+  background-color: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  color: var(--text-muted);
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.upload-trigger-btn:hover {
+  border-color: var(--accent-mint);
+  color: var(--text-main);
+  background-color: rgba(74, 242, 161, 0.02);
+}
+
+/* Сетка мини-превью (5 элементов в ряд) */
+.form-media-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.preview-item-box {
+  position: relative;
+  aspect-ratio: 1; /* Квадратные ячейки */
+  background-color: var(--bg-main);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.preview-item-box img, 
+.preview-item-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Обрезает контент под квадрат без искажения пропорций */
+}
+
+/* Кнопка крестика удаления медиафайла */
+.delete-media-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background-color: rgba(255, 107, 107, 0.85);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+}
+
+.delete-media-btn:hover {
+  background-color: #ff6b6b;
+}

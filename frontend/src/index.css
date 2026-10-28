@@ -1,0 +1,25 @@
+:root {
+  --bg-main: #0d1117;       /* Глубокий темный фон как на GitHub */
+  --bg-card: #161b22;       /* Фон карточек и панелей */
+  --text-main: #e6edf0;     /* Мягкий белый текст */
+  --text-muted: #8b949e;    /* Серый текст для описаний */
+  --accent-mint: #4af2a1;   /* Яркая, но мягкая неоновая мята */
+  --accent-mint-hover: #3cd48b; /* Мята при наведении */
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}

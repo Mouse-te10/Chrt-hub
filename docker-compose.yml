@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # 1. Контейнер базы данных PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: chrt_postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: chrt_admin
+      POSTGRES_PASSWORD: chrt_secure_pass
+      POSTGRES_DB: chrt_hub_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Контейнер бэкенда на FastAPI
+  backend:
+    build: ./backend
+    container_name: chrt_fastapi_backend
+    restart: on-failure
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    # ИСПРАВЛЕНО: Блок environment удален, чтобы не перебивать переменные из .env
+    depends_on:
+      - db
+
+  # 3. Контейнер Веб-панели управления базой данных
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: chrt_pgadmin_web
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@chrt.ru   
+      PGADMIN_DEFAULT_PASSWORD: admin_pass74 
+    ports:
+      - "8080:80"                            
+    depends_on:
+      - db
+
+  # 4. ИСПРАВЛЕНО: Добавлен контейнер фронтенда для раздачи интерфейса в интернет
+  frontend:
+    build: ./frontend
+    container_name: chrt_react_frontend
+    restart: always
+    ports:
+      - "80:5173"  # Открываем стандартный порт 80 (веб) для внешнего мира
+    depends_on:
+      - backend
+    env_file:
+      - .env
+
+volumes:
+  postgres_data:

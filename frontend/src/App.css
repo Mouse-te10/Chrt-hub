@@ -1,0 +1,135 @@
+.welcome-container {
+  max-width: 1200px; /* Немного расширим, чтобы слайдер смотрелся масштабнее */
+  width: 100%;
+  padding: 40px 20px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+}
+
+.welcome-title {
+  font-size: 3.5rem;
+  font-weight: 800;
+  margin-bottom: 24px;
+  letter-spacing: -0.5px;
+}
+
+.welcome-description {
+  font-size: 1.15rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  max-width: 750px;       /* Максимальная ширина на десктопе */
+  width: 100%;            /* Позволяет элементу сжиматься на мобилках */
+  margin-bottom: 40px;
+  box-sizing: border-box; /* Защита от вылавливания за края из-за паддингов */
+}
+.start-button {
+  background-color: var(--accent-mint);
+  color: #0d1117;
+  font-size: 1.2rem;
+  font-weight: 700;
+  padding: 16px 64px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 20px rgba(74, 242, 161, 0.2);
+  margin-bottom: 60px;
+  z-index: 10; /* Чтобы кнопка всегда была кликабельной поверх масок */
+}
+
+.start-button:hover {
+  background-color: var(--accent-mint-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(74, 242, 161, 0.4);
+}
+
+/* ================= СЛАЙДЕР С ГРАДИЕНТАМИ ================= */
+
+/* Главная оболочка слайдера с эффектом размытия по бокам */
+.slider-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 1050px;
+  margin: 0 auto;
+  overflow: hidden;
+  /* Градиентные маски по краям, уходящие в цвет фона сайта */
+  mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  padding: 10px 0;
+}
+
+/* Движущаяся лента карточек */
+.slider-track {
+  display: flex;
+  gap: 24px;
+  transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1); /* Плавный и мягкий сдвиг */
+  width: 100%;
+}
+
+/* Карточка (теперь они фиксированной ширины, чтобы слайдер считал шаги) */
+.preview-card {
+  flex: 0 0 calc(33.333% - 16px); /* Ровно 3 карточки во весь экран с учетом gap */
+  background-color: var(--bg-card);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 32px 24px;
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  box-sizing: border-box;
+  transition: transform 0.3s ease, border-color 0.3s ease;
+}
+
+.preview-card:hover {
+  border-color: rgba(74, 242, 161, 0.3);
+  transform: translateY(-4px);
+}
+
+.preview-card h3 {
+  font-size: 1.25rem;
+  margin-bottom: 12px;
+  color: var(--text-main);
+}
+
+.preview-card p {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+@media (max-width: 900px) {
+  .welcome-description {
+    font-size: 1rem;      /* Чуть уменьшаем размер букв для экранов смартфонов */
+    padding: 0 10px; 
+    width: 100vw;
+  }
+  .slider-wrapper {
+    position: relative;
+    width: 100vw;
+    margin: 0 auto;
+    overflow: hidden;
+    /* Градиентные маски по краям, уходящие в цвет фона сайта */
+    mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+    padding: 10px 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .slider-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 1050px;
+  margin: 0 auto;
+  overflow: hidden;
+  /* Градиентные маски по краям, уходящие в цвет фона сайта */
+  mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 15%, #000 85%, transparent);
+  padding: 10px 0;
+}
+}

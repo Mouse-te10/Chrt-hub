@@ -1,0 +1,114 @@
+.intro-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 99999;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  pointer-events: none;
+  /* Добавляем плавность изменения прозрачности для всего экрана в 1 секунду */
+  transition: opacity 1s ease; 
+  opacity: 1;
+}
+.intro-overlay.fade-out-screen {
+  opacity: 0;
+}
+
+/* Половинки экрана (створки) */
+.intro-gate {
+  position: absolute;
+  top: 0;
+  width: 50vw;
+  height: 100vh;
+  background-color: #05070a; /* Ультра-темный глубокий цвет для интриги */
+  transition: transform 1.2s cubic-bezier(0.77, 0, 0.175, 1);
+  z-index: 1;
+}
+
+.gate-left {
+  left: 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+.gate-right {
+  right: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+/* Когда запускается финал — створки разъезжаются по бокам */
+.intro-overlay.slide-out .gate-left {
+  transform: translateX(-100%);
+}
+
+.intro-overlay.slide-out .gate-right {
+  transform: translateX(100%);
+}
+
+/* Контейнер для неонового текста */
+.intro-text-box {
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  transform: translateY(-100vh); /* Стартуем за границей экрана сверху */
+  animation: drop-and-glow 2.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+.intro-neon-logo {
+  font-size: 5rem;
+  font-weight: 900;
+  letter-spacing: -1px;
+  color: #fff;
+  text-transform: lowercase;
+  /* Мягкое неоновое мятно-фиолетовое свечение */
+  text-shadow: 
+    0 0 10px rgba(74, 242, 161, 0.3),
+    0 0 20px rgba(74, 242, 161, 0.2),
+    0 0 40px rgba(139, 92, 246, 0.2);
+}
+
+/* Плавное исчезновение текста перед открытием створок */
+.intro-overlay.fade-text .intro-text-box {
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+/* ================= АНИМАЦИИ KEYFRAMES ================= */
+
+/* Текст выезжает сверху, мягко тормозит в центре и наливается неоном */
+@keyframes drop-and-glow {
+  0% {
+    transform: translateY(-100vh);
+    opacity: 0;
+  }
+  40% {
+    transform: translateY(0);
+    opacity: 1;
+    text-shadow: 0 0 5px rgba(74, 242, 161, 0.2);
+  }
+  60% {
+    /* Легкий эффект мерцания неона при остановке */
+    text-shadow: 
+      0 0 15px rgba(74, 242, 161, 0.6),
+      0 0 30px rgba(139, 92, 246, 0.4);
+  }
+  80% {
+    text-shadow: 
+      0 0 10px rgba(74, 242, 161, 0.4),
+      0 0 20px rgba(139, 92, 246, 0.3);
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Адаптив для мобилок */
+@media (max-width: 600px) {
+  .intro-neon-logo {
+    font-size: 3.2rem;
+  }
+}

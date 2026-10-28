@@ -1,0 +1,62 @@
+/* Импортируем проверенные стили сетки и блоков */
+@import '../MainPage/MainPage.css';
+@import '../ProjectPage/ProjectPage.css';
+
+.my-projects-wrapper {
+  background-color: var(--bg-main);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Переопределяем среднюю колонку, чтобы подхедер "Назад" стоял аккуратно */
+.my-projects-wrapper .back-row-margin {
+  margin-bottom: 20px;
+}
+
+/* Оставляем футер в самом низу страницы */
+.my-projects-wrapper .main-footer {
+  margin-top: auto;
+}
+/* ... все твои предыдущие @import и стили остаются сверху без изменений ... */
+
+/* ================= ИСПРАВЛЕННЫЕ СТИЛИ ДЛЯ КРУГОВ (БЕЗ ОБРЕЗАНИЯ) ================= */
+.my-projects-wrapper {
+  position: relative;
+  overflow: hidden; /* Защита от скроллов по обеим осям */
+}
+
+.my-projects-wrapper .bg-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(160px);   /* Увеличили размытие для еще большей мягкости */
+  opacity: 0.04;         /* Сделали каплю тусклее, чтобы не перебивать текст */
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Фиолетовое свечение (теперь привязано к левому краю контента) */
+.my-projects-wrapper .glow-top-left {
+  top: -100px;
+  left: 50%;
+  width: 600px;
+  height: 600px;
+  /* Сдвигаем на 800px влево от центра экрана (как раз под левый сайдбар) */
+  transform: translateX(-650px); 
+}
+
+/* Мятное свечение (теперь привязано к правому краю контента и НЕ ОБРЕЗАЕТСЯ) */
+.my-projects-wrapper .glow-bottom-right {
+  bottom: 10%;
+  left: 50%;
+  width: 650px;
+  height: 650px;
+  /* Сдвигаем на 150px вправо от центра экрана (аккурат под карточку профиля) */
+  transform: translateX(0px); 
+}
+
+/* Гарантируем, что основной контент будет четко поверх свечения */
+.my-projects-wrapper .main-layout {
+  position: relative;
+  z-index: 2;
+}
