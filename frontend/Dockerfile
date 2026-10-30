@@ -1,19 +1,21 @@
-# Использовать официальный образ Node.js
-FROM node:20-alpine
-
+# Этап 1: Сборка проекта
+FROM node:20-alpine AS build
 WORKDIR /app
-
-# Копируем файлы зависимостей
 COPY package*.json ./
-
-# Устанавливаем зависимости проекта
 RUN npm install
-
-# Копируем весь остальной код фронтенда
 COPY . .
 
-# Открываем порт Vite наружу
-EXPOSE 5173
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
 
-# Запускаем Vite с флагом --host, чтобы Docker мог пробросить порт в сеть
-CMD ["npm", "run", "dev", "--", "--host"]
+RUN npm run build
+
+# Этап 2: Раздача через Nginx
+FROM nginx:alpine
+# Копируем собранный фронтенд в папку Nginx
+COPY --from=build /app/dist /usr/share/nginx/html
+# Копируем твой настроенный nginx.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+

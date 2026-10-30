@@ -43,11 +43,14 @@ services:
 
   # 4. ИСПРАВЛЕНО: Добавлен контейнер фронтенда для раздачи интерфейса в интернет
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_URL=http://89.108.76
     container_name: chrt_react_frontend
     restart: always
     ports:
-      - "80:5173"  # Открываем стандартный порт 80 (веб) для внешнего мира
+      - "80:80"  # Открываем стандартный порт 80 (веб) для внешнего мира
     depends_on:
       - backend
     env_file:

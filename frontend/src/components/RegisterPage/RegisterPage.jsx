@@ -40,7 +40,7 @@ function RegisterPage({ onBack, onSubmitSuccess }) {
     setIsLoading(true);
     try {
       // 1. Шаг первый — шлем запрос на регистрацию
-      const regResponse = await fetch('http://localhost:8000/api/auth/register', {
+      const regResponse = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, group_name: group, about })
@@ -53,7 +53,7 @@ function RegisterPage({ onBack, onSubmitSuccess }) {
       }
 
       // 2. Шаг второй — если регистрация прошла успешно, сразу автоматически делаем логин
-      const loginResponse = await fetch('http://localhost:8000/api/auth/login', {
+      const loginResponse = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })

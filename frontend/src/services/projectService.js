@@ -1,4 +1,4 @@
-const BASE_URL = 'http://localhost:8000/api';
+const BASE_URL = '/api';
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token'); // Синхронизировано с LoginPage/RegisterPage
@@ -21,7 +21,7 @@ export const projectService = {
     const safeDir = encodeURIComponent(direction);
     const safeLang = encodeURIComponent(lang);
 
-    const response = await fetch(`http://localhost:8000/api/projects?direction=${safeDir}&lang=${safeLang}`, {
+    const response = await fetch(`/api/projects?direction=${safeDir}&lang=${safeLang}`, {
       method: 'GET',
       headers: headers
     });
