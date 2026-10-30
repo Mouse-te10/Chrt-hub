@@ -1,4 +1,3 @@
-const BASE_URL = '/api';
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token'); // Синхронизировано с LoginPage/RegisterPage
@@ -71,9 +70,9 @@ export const projectService = {
     const token = localStorage.getItem('token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
 
-    const res = await fetch(`${BASE_URL}/projects`, {
+    const res = await fetch('/api/projects', {
       method: 'POST',
-      headers: headers, 
+      headers: getAuthHeaders(), 
       body: formData,
     });
 
