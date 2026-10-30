@@ -93,8 +93,13 @@ from jose import jwt
 import os
 import bcrypt
 
-# Конфигурация шифрования — теперь безопасно читается из .env через Docker
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "CHRT_HUB_SUPER_SECRET_KEY_DEFAULT_74")
+# Безопасно читаем ключ из .env. Если его нет — падаем с ошибкой при запуске
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "🚨 КРИТИЧЕСКАЯ ОШИБКА БЕЗОПАСНОСТИ: Переменная окружения JWT_SECRET_KEY не задана в .env или Docker Compose!"
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 
@@ -229,12 +234,13 @@ from uuid import uuid4
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from app.models import ProjectLike
+from sqlalchemy import distinct
 
 app = FastAPI(title="Chrt-Hub API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://89.108.76.180", "http://89.108.76.180:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -328,6 +334,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     return user
 
 
+# ================= ЭНДПОИНТ: ПОЛУЧЕНИЕ ВСЕХ ПРОЕКТОВ (ОПТИМИЗИРОВАННЫЙ) =================
 @app.get("/api/projects", tags=["Projects"])
 async def get_all_projects(direction: str = "Все", lang: str = "Все", request: Request = None, db: AsyncSession = Depends(get_db)):
     # Безопасно извлекаем user_id из JWT-токена
@@ -341,29 +348,44 @@ async def get_all_projects(direction: str = "Все", lang: str = "Все", requ
         except:
             pass
 
-    # Запрос считает лайки для каждого проекта
+    # 1. Создаем изолированный подзапрос для подсчета лайков (избавляет от гигантских group_by)
+    likes_subquery = (
+        select(
+            ProjectLike.project_id,
+            func.count(ProjectLike.id).label("likes_count")
+        )
+        .group_by(ProjectLike.project_id)
+        .subquery()
+    )
+
+    # 2. Основной запрос: соединяем проект, автора и наш подзапрос лайков
     query = (
         select(
             Project,
-            func.count(ProjectLike.id).label("likes_count")
+            func.coalesce(likes_subquery.c.likes_count, 0).label("likes_count")
         )
         .options(selectinload(Project.author))
-        .join(ProjectLike, Project.id == ProjectLike.project_id, isouter=True)
-        .group_by(Project.id, Project.title, Project.short_desc, Project.full_desc, Project.direction, Project.lang, Project.github, Project.comments_disabled, Project.author_id, Project.media_urls)
+        .join(likes_subquery, Project.id == likes_subquery.c.project_id, isouter=True)
     )
     
+    # Фильтрация по направлению
     if direction != "Все":
         query = query.where(Project.direction == direction)
+        
+    # Безопасная фильтрация по языку программирования (с защитой от None / null в БД)
     if lang != "Все":
-        query = query.where(func.lower(Project.lang) == lang.lower())
+        query = query.where(
+            Project.lang.isnot(None),
+            func.lower(Project.lang) == lang.lower()
+        )
     
     result = await db.execute(query.order_by(Project.id.desc()))
     rows = result.all()
     
     response_data = []
     for row in rows:
-        p = row[0]          # Ссылка на сам объект Project
-        likes_cnt = row[1]  # РЕАЛЬНОЕ ЧИСЛО ЛАЙКОВ ИЗ БАЗЫ ДАННЫХ (число)
+        p = row[0]          # Объект Project
+        likes_cnt = row[1]  # Гарантированное число лайков из подзапроса
         
         # Проверяем, лайкнул ли проект именно этот залогиненный студент
         has_liked = False
@@ -386,11 +408,12 @@ async def get_all_projects(direction: str = "Все", lang: str = "Все", requ
             "author_id": p.author_id,
             "group_name": p.author.group_name,
             "media": p.media_urls,
-            "likesCount": likes_cnt,  # Теперь тут гарантированно число (например, 0, 1, 5)
+            "likesCount": int(likes_cnt),  # Приводим к чистому Int
             "hasLiked": has_liked
         })
         
     return response_data
+
 
 
 
@@ -444,9 +467,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
 
-# ================= ЭНДПОИНТ: ПУБЛИКАЦИЯ ПРОЕКТА =================
-# === ИСПРАВЛЕННЫЙ БЛОК СОЗДАНИЯ ПРОЕКТА В backend/app/main.py ===
+# Константы для валидации файлов (добавьте перед эндпоинтом или в начало файла)
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 Мегабайт
+MAX_FILES_COUNT = 10
+ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime"]
 
+# ================= ЭНДПОИНТ: ПУБЛИКАЦИЯ ПРОЕКТА (ЗАЩИЩЕННЫЙ) =================
 @app.post("/api/projects", status_code=status.HTTP_201_CREATED, tags=["Projects"])
 @app.post("/api/projects/", status_code=status.HTTP_201_CREATED, tags=["Projects"])
 async def create_project(
@@ -458,18 +484,37 @@ async def create_project(
     github: str = Form(""),
     commentsDisabled: bool = Form(False),
     files: list[UploadFile] = File(default=[]), 
-    current_user: User = Depends(get_current_user), # FastAPI уже сам вытащил юзера здесь!
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    # !!! УДАЛИТЕ ОТСЮДА СТРОКИ: !!!
-    # user_id = None
-    # auth_header = request.headers.get("Authorization")  <-- Из-за этого была ошибка NameError
-    # ... и весь сопутствующий try-except блок, если вы его сюда добавляли.
+    # 1. Защита от спама файлами (лимит количества)
+    if len(files) > MAX_FILES_COUNT:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Нельзя прикрепить больше {MAX_FILES_COUNT} медиафайлов!"
+        )
 
     saved_media_urls = []
 
-    # Ниже идет ваш оригинальный рабочий код сохранения файлов...
     for file in files:
+        # 2. Валидация расширения/типа файла
+        if file.content_type not in ALLOWED_MIME_TYPES:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Файл {file.filename} имеет недопустимый формат! Разрешены только фото и mp4/mov видео."
+            )
+            
+        # 3. Валидация размера файла (защита от Denial of Service)
+        await file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        await file.seek(0) # Обязательно возвращаем указатель в начало перед чтением
+        
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Файл {file.filename} превышает лимит в 50 МБ!"
+            )
+
         file_ext = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid4()}{file_ext}"
         file_path = os.path.join(UPLOAD_DIR, unique_filename)
@@ -478,6 +523,38 @@ async def create_project(
             shutil.copyfileobj(file.file, buffer)
         
         saved_media_urls.append(f"http://localhost:8000/static/{unique_filename}")
+
+    new_project = Project(
+        title=title,
+        short_desc=shortDesc,
+        full_desc=fullDesc,
+        direction=direction,
+        lang=lang,
+        github=github,
+        comments_disabled=commentsDisabled,
+        author_id=current_user.id,
+        media_urls=saved_media_urls 
+    )
+    db.add(new_project)
+    await db.commit()
+    await db.refresh(new_project)
+    
+    return {
+        "id": new_project.id,
+        "title": new_project.title,
+        "shortDesc": new_project.short_desc,
+        "fullDesc": new_project.full_desc,
+        "direction": new_project.direction,
+        "lang": new_project.lang,
+        "github": new_project.github,
+        "commentsDisabled": new_project.comments_disabled,
+        "author": current_user.username,
+        "author_id": new_project.author_id,
+        "media": new_project.media_urls,
+        "likesCount": 0,
+        "hasLiked": False,
+    }
+
 
     new_project = Project(
         title=title,
@@ -615,8 +692,7 @@ async def create_comment(comment_data: CommentCreate, current_user: User = Depen
         "user_vote": None
     }
 
-
-# ================= ЭНДПОИНТ: ЛАЙК / ДИЗЛАЙК С ЛОГИКОЙ TOGGLE =================
+# ================= ЭНДПОИНТ: ЛАЙК / ДИЗЛАЙК С ЛОГИКОЙ TOGGLE (ЗАЩИЩЕННЫЙ) =================
 @app.post("/api/comments/{comment_id}/vote", tags=["Comments"])
 async def vote_comment(comment_id: int, vote_data: VoteRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # Проверяем наличие комментария
@@ -624,7 +700,7 @@ async def vote_comment(comment_id: int, vote_data: VoteRequest, current_user: Us
     if not comm_res.scalars().first():
         raise HTTPException(status_code=404, detail="Комментарий не найден")
 
-    # Ищем, голосовал ли уже этот студент за этот комментарий
+    # ИСПРАВЛЕНО: Теперь ищем голос ИМЕННО ЭТОГО залогиненного студента (защита от IDOR)
     vote_res = await db.execute(
         select(CommentVote)
         .where(CommentVote.user_id == current_user.id, CommentVote.comment_id == comment_id)
@@ -653,9 +729,10 @@ async def vote_comment(comment_id: int, vote_data: VoteRequest, current_user: Us
     await db.commit()
     return {"status": "success", "message": msg}
 
+
 @app.get("/api/users/rating", tags=["System"])
 async def get_users_rating(db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import distinct
+
     query = (
         select(
             User.username, 
@@ -703,6 +780,7 @@ async def toggle_project_like(project_id: int, current_user: User = Depends(get_
     
     await db.commit()
     return {"status": "success", "message": msg}
+
 
 === FILE: backend/app/config.py ===
 
@@ -1934,7 +2012,7 @@ function LoginPage({ onBack, onSubmitSuccess }) {
 
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
+      const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -3312,7 +3390,7 @@ function RegisterPage({ onBack, onSubmitSuccess }) {
     setIsLoading(true);
     try {
       // 1. Шаг первый — шлем запрос на регистрацию
-      const regResponse = await fetch('http://localhost:8000/api/auth/register', {
+      const regResponse = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, group_name: group, about })
@@ -3325,7 +3403,7 @@ function RegisterPage({ onBack, onSubmitSuccess }) {
       }
 
       // 2. Шаг второй — если регистрация прошла успешно, сразу автоматически делаем логин
-      const loginResponse = await fetch('http://localhost:8000/api/auth/login', {
+      const loginResponse = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })

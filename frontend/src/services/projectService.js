@@ -42,50 +42,50 @@ export const projectService = {
 
     // Опубликовать проект (теперь с реальными файлами)
     // Опубликовать проект (Исправленная версия)
-  createProject: async (projectData) => {
+  // Пример того, как должен выглядеть метод внутри вашего projectService.js
+  async createProject(newProjectData) {
     const formData = new FormData();
     
-    // Переносим текстовые поля формы в FormData
-    formData.append('title', projectData.title);
-    formData.append('shortDesc', projectData.shortDesc);
-    formData.append('fullDesc', projectData.fullDesc || '');
-    formData.append('direction', projectData.direction);
-    formData.append('lang', projectData.lang || '');
-    formData.append('github', projectData.github || '');
+    // Добавляем все текстовые поля
+    formData.append('title', newProjectData.title);
+    formData.append('shortDesc', newProjectData.shortDesc);
+    formData.append('fullDesc', newProjectData.fullDesc);
+    formData.append('direction', newProjectData.direction);
+    formData.append('lang', newProjectData.lang);
+    formData.append('github', newProjectData.github);
+    formData.append('commentsDisabled', newProjectData.commentsDisabled);
     
-    // Передаем boolean как строку 'true' / 'false' для корректной работы FormData
-    formData.append('commentsDisabled', projectData.commentsDisabled ? 'true' : 'false');
+    // ЯВНО прикрепляем токен в саму форму для бэкенда!
+    const token = localStorage.getItem('token');
+    if (token) {
+      formData.append('token', token); 
+    }
 
-    // ДОБАВЛЯЕМ ФАЙЛЫ ПРАВИЛЬНО
-    if (projectData.mediaFiles && projectData.mediaFiles.length > 0) {
-      projectData.mediaFiles.forEach(file => {
-        // Так как projectData.mediaFiles — это теперь массив чистых File (а не объектов),
-        // мы добавляем в FormData напрямую сам элемент цикла `file`
-        if (file) {
-          formData.append('files', file); 
-        }
+    // Добавляем файлы
+    if (newProjectData.mediaFiles) {
+      newProjectData.mediaFiles.forEach((file) => {
+        formData.append('files', file);
       });
     }
 
-    const token = localStorage.getItem('token');
-    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-
-    const res = await fetch('/api/projects', {
+    const response = await fetch('/api/projects', {
       method: 'POST',
-      headers: getAuthHeaders(), 
-      body: formData,
+      headers: {
+        // ВАЖНО: При отправке FormData заголовок 'Content-Type' указывать НЕ НАДО, 
+        // браузер должен поставить его сам вместе с boundary-разделителями!
+        'Authorization': `Bearer ${token}` // оставляем для подстраховки
+      },
+      body: formData
     });
 
-    if (!res.ok) {
-      const err = await res.json();
-      // Извлекаем детальную ошибку от FastAPI, если она есть
-      const detailMessage = typeof err.detail === 'string' 
-        ? err.detail 
-        : (err.detail?.[0]?.msg || 'Ошибка при публикации проекта с медиа');
-      throw new Error(detailMessage);
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Ошибка создания проекта');
     }
-    return await res.json();
+
+    return await response.json();
   },
+
 
 
   // Удалить проект
