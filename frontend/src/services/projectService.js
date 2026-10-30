@@ -43,37 +43,38 @@ export const projectService = {
     // Опубликовать проект (теперь с реальными файлами)
     // Опубликовать проект (Исправленная версия)
   // Пример того, как должен выглядеть метод внутри вашего projectService.js
+    // Опубликовать проект (теперь с корректным адресом бэкенда)
   async createProject(newProjectData) {
     const formData = new FormData();
     
     // Добавляем все текстовые поля
     formData.append('title', newProjectData.title);
     formData.append('shortDesc', newProjectData.shortDesc);
-    formData.append('fullDesc', newProjectData.fullDesc);
+    formData.append('fullDesc', newProjectData.fullDesc || '');
     formData.append('direction', newProjectData.direction);
-    formData.append('lang', newProjectData.lang);
-    formData.append('github', newProjectData.github);
-    formData.append('commentsDisabled', newProjectData.commentsDisabled);
+    formData.append('lang', newProjectData.lang || '');
+    formData.append('github', newProjectData.github || '');
     
-    // ЯВНО прикрепляем токен в саму форму для бэкенда!
+    // Преобразуем boolean в строку, так как FormData передает только строки или файлы
+    formData.append('commentsDisabled', newProjectData.commentsDisabled ? 'true' : 'false');
+    
     const token = localStorage.getItem('token');
     if (token) {
       formData.append('token', token); 
     }
 
     // Добавляем файлы
-    if (newProjectData.mediaFiles) {
+    if (newProjectData.mediaFiles && newProjectData.mediaFiles.length > 0) {
       newProjectData.mediaFiles.forEach((file) => {
         formData.append('files', file);
       });
     }
 
-    const response = await fetch('/api/projects', {
+    // ИСПРАВЛЕНО: Меняем '/api/projects' на '${BASE_URL}/projects'
+    const response = await fetch(`${BASE_URL}/projects`, {
       method: 'POST',
       headers: {
-        // ВАЖНО: При отправке FormData заголовок 'Content-Type' указывать НЕ НАДО, 
-        // браузер должен поставить его сам вместе с boundary-разделителями!
-        'Authorization': `Bearer ${token}` // оставляем для подстраховки
+        'Authorization': `Bearer ${token}`
       },
       body: formData
     });
@@ -85,8 +86,6 @@ export const projectService = {
 
     return await response.json();
   },
-
-
 
   // Удалить проект
   deleteProject: async (id) => {
