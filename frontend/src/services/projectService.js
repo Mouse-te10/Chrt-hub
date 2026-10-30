@@ -1,12 +1,14 @@
+// Прямой адрес бэкенда FastAPI на порту 8000 с префиксом /api
+const BASE_URL = 'http://89.108.76/api'; 
 
 const getAuthHeaders = () => {
-  const token = localStorage.getItem('token'); // Синхронизировано с LoginPage/RegisterPage
+  const token = localStorage.getItem('token'); 
   return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
 
 export const projectService = {
-  // Получить все проекты с учетом фильтров
-      // Получить все проекты с учетом фильтров (Исправлено экранирование спецсимволов)
+  
+  // 1. Получить все проекты с учетом фильтров
   getAllProjects: async (direction, lang) => {
     const token = localStorage.getItem('token');
     const headers = { 'Content-Type': 'application/json' };
@@ -15,12 +17,11 @@ export const projectService = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    // Экранируем переменные с помощью encodeURIComponent
-    // Теперь "C#" превратится в безопасный "C%23", и решетка не отрежется браузером!
+    // Экранируем переменные, чтобы спецсимволы (например, "C#") не ломали URL запроса
     const safeDir = encodeURIComponent(direction);
     const safeLang = encodeURIComponent(lang);
 
-    const response = await fetch(`/api/projects?direction=${safeDir}&lang=${safeLang}`, {
+    const response = await fetch(`${BASE_URL}/projects?direction=${safeDir}&lang=${safeLang}`, {
       method: 'GET',
       headers: headers
     });
@@ -29,9 +30,7 @@ export const projectService = {
     return response.json();
   },
 
-
-
-  // Получить проекты залогиненного студента
+  // 2. Получить проекты залогиненного студента
   getMyProjects: async () => {
     const res = await fetch(`${BASE_URL}/my/projects`, {
       headers: getAuthHeaders(),
@@ -40,10 +39,7 @@ export const projectService = {
     return await res.json();
   },
 
-    // Опубликовать проект (теперь с реальными файлами)
-    // Опубликовать проект (Исправленная версия)
-  // Пример того, как должен выглядеть метод внутри вашего projectService.js
-    // Опубликовать проект (теперь с корректным адресом бэкенда)
+  // 3. Опубликовать проект (Исправленная версия для отправки фото и видео)
   async createProject(newProjectData) {
     const formData = new FormData();
     
@@ -55,7 +51,7 @@ export const projectService = {
     formData.append('lang', newProjectData.lang || '');
     formData.append('github', newProjectData.github || '');
     
-    // Преобразуем boolean в строку, так как FormData передает только строки или файлы
+    // Преобразуем boolean в строку для корректной передачи через FormData
     formData.append('commentsDisabled', newProjectData.commentsDisabled ? 'true' : 'false');
     
     const token = localStorage.getItem('token');
@@ -63,18 +59,19 @@ export const projectService = {
       formData.append('token', token); 
     }
 
-    // Добавляем файлы
+    // Добавляем файлы в массив (на бэкенде их ожидает аргумент 'files')
     if (newProjectData.mediaFiles && newProjectData.mediaFiles.length > 0) {
       newProjectData.mediaFiles.forEach((file) => {
         formData.append('files', file);
       });
     }
 
-    // ИСПРАВЛЕНО: Меняем '/api/projects' на '${BASE_URL}/projects'
+    // Строго шлем запрос на порт 8000 бэкенда в обход Nginx
     const response = await fetch(`${BASE_URL}/projects`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`
+        // Важно: 'Content-Type' указывать НЕ НАДО, браузер сделает это сам!
       },
       body: formData
     });
@@ -87,7 +84,7 @@ export const projectService = {
     return await response.json();
   },
 
-  // Удалить проект
+  // 4. Удалить проект
   deleteProject: async (id) => {
     const res = await fetch(`${BASE_URL}/projects/${id}`, {
       method: 'DELETE',
@@ -99,7 +96,8 @@ export const projectService = {
     }
     return true;
   },
-    // Получить комментарии к проекту
+
+  // 5. Получить комментарии к проекту
   getComments: async (projectId) => {
     const token = localStorage.getItem('token');
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
@@ -108,7 +106,7 @@ export const projectService = {
     return await res.json();
   },
 
-  // Создать комментарий
+  // 6. Создать комментарий
   createComment: async (text, projectId) => {
     const res = await fetch(`${BASE_URL}/comments`, {
       method: 'POST',
@@ -125,7 +123,7 @@ export const projectService = {
     return await res.json();
   },
 
-  // Проголосовать (лайк/дизлайк)
+  // 7. Проголосовать за комментарий (лайк/дизлайк)
   voteComment: async (commentId, isLike) => {
     const res = await fetch(`${BASE_URL}/comments/${commentId}/vote`, {
       method: 'POST',
@@ -141,12 +139,15 @@ export const projectService = {
     }
     return await res.json();
   },
-    // Получить ТОП-5 студентов по количеству проектов
+
+  // 8. Получить ТОП-5 студентов по рейтингу лайков
   getLeaderboard: async () => {
     const res = await fetch(`${BASE_URL}/users/rating`);
     if (!res.ok) throw new Error('Не удалось загрузить рейтинг ЧРТ');
     return await res.json();
   },
+
+  // 9. Поставить/убрать лайк проекту
   toggleProjectLike: async (projectId) => {
     const res = await fetch(`${BASE_URL}/projects/${projectId}/like`, {
       method: 'POST',
@@ -161,6 +162,4 @@ export const projectService = {
     }
     return await res.json();
   },
-
 };
-
