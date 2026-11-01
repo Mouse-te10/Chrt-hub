@@ -312,12 +312,36 @@ async def login_user(login_data: UserLogin, db: AsyncSession = Depends(get_db)):
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 # Зависимость для извлечения текущего пользователя из JWT
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
+# Переписываем зависимость для извлечения текущего пользователя
+async def get_current_user(
+    request: Request, # Добавляем request для чтения заголовков вручную
+    db: AsyncSession = Depends(get_db)
+):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Не удалось валидировать учетные данные",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    token = None
+    
+    # 1. Сначала пробуем достать токен из стандартного заголовка Authorization
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        
+    # 2. Если заголовка нет (особенность multipart/form-data на фронте), 
+    # пробуем прочитать его из полей формы (Form Data)
+    if not token:
+        try:
+            form_data = await request.form()
+            token = form_data.get("token") # Будем передавать его с фронта как обычное поле
+        except:
+            pass
+
+    if not token:
+        raise credentials_exception
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -332,6 +356,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
     if user is None:
         raise credentials_exception
     return user
+
 
 
 # ================= ЭНДПОИНТ: ПОЛУЧЕНИЕ ВСЕХ ПРОЕКТОВ (ОПТИМИЗИРОВАННЫЙ) =================

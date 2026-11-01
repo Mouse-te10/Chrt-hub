@@ -130,7 +130,7 @@ function ProjectPage({ project, currentUsername, onBack, projects, onViewProject
               {projectMedia[mediaIndex].includes('video') || (typeof projectMedia[mediaIndex] === 'string' && projectMedia[mediaIndex].endsWith('.mp4')) ? (
                 <video src={projectMedia[mediaIndex]} muted autoPlay loop />
               ) : (
-                <img src={projectMedia[mediaIndex]} alt="Скриншот проекта" />
+                <img src={projectMedia[mediaIndex].startsWith('http') ? projectMedia[mediaIndex] : `http://89.108.76.180:8000${projectMedia[mediaIndex]}`} alt="Скриншот проекта" />
               )}
             </div>
             <button className="slider-arrow right" onClick={nextMedia}>›</button>

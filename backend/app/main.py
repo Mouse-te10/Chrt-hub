@@ -283,7 +283,6 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 Мегабайт
 MAX_FILES_COUNT = 10
 ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp", "video/mp4", "video/quicktime"]
 
-# ================= ЭНДПОИНТ: ПУБЛИКАЦИЯ ПРОЕКТА (ЗАЩИЩЕННЫЙ) =================
 @app.post("/api/projects", status_code=status.HTTP_201_CREATED, tags=["Projects"])
 @app.post("/api/projects/", status_code=status.HTTP_201_CREATED, tags=["Projects"])
 async def create_project(
@@ -315,10 +314,10 @@ async def create_project(
                 detail=f"Файл {file.filename} имеет недопустимый формат! Разрешены только фото и mp4/mov видео."
             )
             
-        # 3. Валидация размера файла (защита от Denial of Service)
+        # 3. Валидация размера файла
         await file.seek(0, os.SEEK_END)
-        file_size = file.tell()
-        await file.seek(0) # Обязательно возвращаем указатель в начало перед чтением
+        file_size = await file.tell() # ИСПРАВЛЕНО: добавлен await
+        await file.seek(0) 
         
         if file_size > MAX_FILE_SIZE:
             raise HTTPException(
@@ -330,42 +329,13 @@ async def create_project(
         unique_filename = f"{uuid4()}{file_ext}"
         file_path = os.path.join(UPLOAD_DIR, unique_filename)
 
+        # ИСПРАВЛЕНО: Асинхронное чтение и запись, чтобы не блокировать сервер
+        content = await file.read()
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(content)
         
-        saved_media_urls.append(f"http://localhost:8000/static/{unique_filename}")
-
-    new_project = Project(
-        title=title,
-        short_desc=shortDesc,
-        full_desc=fullDesc,
-        direction=direction,
-        lang=lang,
-        github=github,
-        comments_disabled=commentsDisabled,
-        author_id=current_user.id,
-        media_urls=saved_media_urls 
-    )
-    db.add(new_project)
-    await db.commit()
-    await db.refresh(new_project)
-    
-    return {
-        "id": new_project.id,
-        "title": new_project.title,
-        "shortDesc": new_project.short_desc,
-        "fullDesc": new_project.full_desc,
-        "direction": new_project.direction,
-        "lang": new_project.lang,
-        "github": new_project.github,
-        "commentsDisabled": new_project.comments_disabled,
-        "author": current_user.username,
-        "author_id": new_project.author_id,
-        "media": new_project.media_urls,
-        "likesCount": 0,
-        "hasLiked": False,
-    }
-
+        # ИСПРАВЛЕНО: Убрал "localhost", чтобы картинки открывались у всех, а не только на твоем ПК
+        saved_media_urls.append(f"/static/{unique_filename}")
 
     new_project = Project(
         title=title,
